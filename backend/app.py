@@ -132,7 +132,7 @@ def download_preview_file(preview_id: str, file_name: str) -> Response:
     blob = preview.get(file_name)
     if blob is None:
         raise HTTPException(status_code=404, detail="Preview PDF not found.")
-    headers = {"Content-Disposition": f'attachment; filename="{file_name}"'}
+    headers = {"Content-Disposition": f'inline; filename="{file_name}"'}
     return Response(content=blob, media_type="application/pdf", headers=headers)
 
 

@@ -1,11 +1,6 @@
 const state = {
   preview: [],
   showName: "",
-  pdfBlobCache: {},
-  pdfBlobLoads: {},
-  pdfObjectUrlCache: {},
-  pdfDataUrlCache: {},
-  pdfStateByUrl: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -61,167 +56,8 @@ function buildMailtoHref(row) {
   if (!email) return "";
   const showName = state.showName || "Show";
   const subject = `${showName} tickets`;
-  const body = [
-    "Hi,",
-    "",
-    "Please find your tickets attached.",
-    "",
-    "Best regards,",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const body = ["Hi,", "", "Please find your tickets attached.", "", "Best regards,"].join("\n");
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
-
-async function primePdfBlob(row) {
-  const key = row.pdf_url || "";
-  if (!key) return null;
-  if (state.pdfBlobCache[key]) return state.pdfBlobCache[key];
-  if (state.pdfBlobLoads[key]) return state.pdfBlobLoads[key];
-  state.pdfStateByUrl[key] = "loading";
-
-  state.pdfBlobLoads[key] = (async () => {
-    try {
-      let blob = null;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          const res = await fetch(toAbsoluteUrl(key), { cache: "no-store" });
-          if (!res.ok) continue;
-          blob = await res.blob();
-          if (blob && blob.size > 0) break;
-        } catch (_) {}
-      }
-      if (!blob || blob.size === 0) {
-        state.pdfStateByUrl[key] = "failed";
-        return null;
-      }
-      state.pdfBlobCache[key] = blob;
-      if (!state.pdfObjectUrlCache[key]) {
-        state.pdfObjectUrlCache[key] = URL.createObjectURL(blob);
-      }
-      if (!state.pdfDataUrlCache[key]) {
-        state.pdfDataUrlCache[key] = await blobToDataUrl(blob);
-      }
-      state.pdfStateByUrl[key] = "ready";
-      return blob;
-    } catch (_) {
-      state.pdfStateByUrl[key] = "failed";
-      return null;
-    } finally {
-      delete state.pdfBlobLoads[key];
-    }
-  })();
-
-  return state.pdfBlobLoads[key];
-}
-
-async function downloadPdfToDevice(row) {
-  const key = row.pdf_url || "";
-  if (!key) return;
-  await primePdfBlob(row);
-  const blob = state.pdfBlobCache[key];
-  if (!blob) {
-    setStatus("PDF is not ready yet. Rebuild preview and try again.", true);
-    return false;
-  }
-
-  const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = objectUrl;
-  a.download = row.pdf_file || "ticket.pdf";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
-  return true;
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(String(reader.result || ""));
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function primeAllPreviewPdfs(rows, onProgress) {
-  const list = rows.filter((row) => row && row.pdf_url);
-  for (let idx = 0; idx < list.length; idx += 1) {
-    await primePdfBlob(list[idx]);
-    if (onProgress) onProgress(idx + 1, list.length);
-  }
-}
-
-function clearPdfCaches() {
-  for (const key of Object.keys(state.pdfObjectUrlCache)) {
-    try {
-      URL.revokeObjectURL(state.pdfObjectUrlCache[key]);
-    } catch (_) {}
-  }
-  state.pdfBlobCache = {};
-  state.pdfBlobLoads = {};
-  state.pdfObjectUrlCache = {};
-  state.pdfDataUrlCache = {};
-  state.pdfStateByUrl = {};
-}
-
-async function downloadAllPreviewPdfs() {
-  if (!state.preview.length) {
-    setStatus("Build a preview first.", true);
-    return;
-  }
-  let done = 0;
-  for (const row of state.preview) {
-    if (!row.pdf_url) continue;
-    await primePdfBlob(row);
-    const ok = await downloadPdfToDevice(row);
-    if (ok) done += 1;
-    await new Promise((resolve) => setTimeout(resolve, 140));
-  }
-  setStatus(`Downloaded ${done} PDF file(s).`);
-}
-
-function wirePdfDrag(linkEl, row) {
-  const key = row.pdf_url || "";
-  if (!key) return;
-  const absoluteUrl = toAbsoluteUrl(key);
-  if (!absoluteUrl) return;
-  linkEl.draggable = true;
-  linkEl.title = "Drag to attach PDF";
-
-  linkEl.addEventListener("pointerenter", () => {
-    primePdfBlob(row);
-  });
-  linkEl.addEventListener("mousedown", () => {
-    primePdfBlob(row);
-  });
-
-  linkEl.addEventListener("dragstart", (event) => {
-    const dt = event.dataTransfer;
-    if (!dt) return;
-    dt.effectAllowed = "copy";
-    const cached = state.pdfBlobCache[key];
-    const fileName = row.pdf_file || "ticket.pdf";
-    if (!cached) {
-      event.preventDefault();
-      setStatus("PDF still loading. Try drag again in a moment.", true);
-      primePdfBlob(row);
-      return;
-    }
-    let fileAdded = false;
-    if (cached && dt.items && dt.items.add) {
-      try {
-        const file = new File([cached], fileName, { type: "application/pdf" });
-        dt.items.add(file);
-        fileAdded = true;
-      } catch (_) {}
-    }
-    if (!fileAdded) {
-      dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
-    }
-    dt.setData("text/plain", "");
-  });
 }
 
 async function uploadAndFetch(path) {
@@ -253,6 +89,7 @@ function renderPreview() {
 
   for (const row of state.preview) {
     const tr = document.createElement("tr");
+
     const emailTd = document.createElement("td");
     if (row.email) {
       const mailLink = document.createElement("a");
@@ -265,43 +102,25 @@ function renderPreview() {
 
     const pdfTd = document.createElement("td");
     if (row.pdf_url && row.pdf_file) {
-      const key = row.pdf_url || "";
-      const loadState = state.pdfStateByUrl[key] || "loading";
-      const ready = loadState === "ready";
-      const openLink = document.createElement("a");
-      openLink.href = toAbsoluteUrl(key);
-      openLink.textContent = row.pdf_file;
-      openLink.className = "pdf-open-link";
-      openLink.target = "_blank";
-      openLink.rel = "noopener noreferrer";
+      const absolutePdfUrl = toAbsoluteUrl(row.pdf_url);
 
-      const dragChip = document.createElement("span");
-      dragChip.textContent = "Drag PDF";
-      dragChip.className = "pdf-drag-link";
-      if (ready) {
-        wirePdfDrag(dragChip, row);
-      } else {
-        dragChip.classList.add("is-disabled");
-        dragChip.title = loadState === "failed" ? "Failed to load PDF" : "PDF still loading";
-      }
+      const fileLink = document.createElement("a");
+      fileLink.href = absolutePdfUrl;
+      fileLink.textContent = row.pdf_file;
+      fileLink.target = "_blank";
+      fileLink.rel = "noopener noreferrer";
+      fileLink.className = "pdf-open-link";
 
-      const readyChip = document.createElement("span");
-      if (loadState === "ready") {
-        readyChip.className = "pdf-ready is-ready";
-        readyChip.textContent = "Ready";
-      } else if (loadState === "failed") {
-        readyChip.className = "pdf-ready is-failed";
-        readyChip.textContent = "Failed";
-      } else {
-        readyChip.className = "pdf-ready is-loading";
-        readyChip.textContent = "Loading";
-      }
+      const dragLink = document.createElement("a");
+      dragLink.href = absolutePdfUrl;
+      dragLink.textContent = "Drag PDF";
+      dragLink.className = "pdf-drag-link";
+      dragLink.draggable = true;
+      dragLink.addEventListener("click", (event) => event.preventDefault());
 
-      pdfTd.appendChild(openLink);
+      pdfTd.appendChild(fileLink);
       pdfTd.appendChild(document.createTextNode(" "));
-      pdfTd.appendChild(dragChip);
-      pdfTd.appendChild(document.createTextNode(" "));
-      pdfTd.appendChild(readyChip);
+      pdfTd.appendChild(dragLink);
     } else {
       pdfTd.textContent = row.pdf_file || "";
     }
@@ -377,18 +196,10 @@ $("buildBtn").addEventListener("click", async () => {
     state.showName = detectShowName();
     const res = await uploadAndFetch("/ticket-bundles/preview");
     const data = await res.json();
-    clearPdfCaches();
     state.preview = data.rows || [];
     renderPreview();
-    await primeAllPreviewPdfs(state.preview, (done, total) => {
-      renderPreview();
-      setStatus(`Preparing PDFs for drag and download... ${done}/${total}`);
-    });
     renderStats(data.stats || null);
-
-    const failures = data.failures || [];
-    renderFailures(failures);
-
+    renderFailures(data.failures || []);
     setStatus(`Built list: ${state.preview.length} email/PDF rows.`);
   } catch (err) {
     renderStats(null);
@@ -401,6 +212,3 @@ $("buildBtn").addEventListener("click", async () => {
 
 $("allocationCsvFile").addEventListener("change", maybePrefillShowName);
 $("ticketsPdfFile").addEventListener("change", maybePrefillShowName);
-$("downloadAllBtn").addEventListener("click", async () => {
-  await downloadAllPreviewPdfs();
-});
