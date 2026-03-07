@@ -60,14 +60,20 @@ function buildMailtoHref(row) {
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-function getPdfHref(row) {
+function getPdfOpenHref(row) {
+  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
+  if (row.pdf_data_url) return row.pdf_data_url;
+  return "";
+}
+
+function getPdfDragHref(row) {
   if (row.pdf_data_url) return row.pdf_data_url;
   if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   return "";
 }
 
 function wireDragPdf(linkEl, row) {
-  const href = getPdfHref(row);
+  const href = getPdfDragHref(row);
   if (!href) return;
   const fileName = row.pdf_file || "ticket.pdf";
   linkEl.draggable = true;
@@ -120,17 +126,18 @@ function renderPreview() {
     }
 
     const pdfTd = document.createElement("td");
-    const href = getPdfHref(row);
-    if (href && row.pdf_file) {
+    const openHref = getPdfOpenHref(row);
+    const dragHref = getPdfDragHref(row);
+    if (openHref && row.pdf_file) {
       const fileLink = document.createElement("a");
-      fileLink.href = href;
+      fileLink.href = openHref;
       fileLink.textContent = row.pdf_file;
       fileLink.target = "_blank";
       fileLink.rel = "noopener noreferrer";
       fileLink.className = "pdf-open-link";
 
       const dragLink = document.createElement("a");
-      dragLink.href = href;
+      dragLink.href = dragHref || openHref;
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
       dragLink.addEventListener("click", (event) => event.preventDefault());
