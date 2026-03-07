@@ -102,7 +102,10 @@ async function downloadPdfToDevice(row) {
   if (!key) return;
   await primePdfBlob(row);
   const blob = state.pdfBlobCache[key];
-  if (!blob) return;
+  if (!blob) {
+    setStatus("PDF is not ready yet. Rebuild preview and try again.", true);
+    return;
+  }
 
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -219,6 +222,7 @@ function renderPreview() {
 
     const pdfTd = document.createElement("td");
     if (row.pdf_url && row.pdf_file) {
+      const ready = Boolean(state.pdfBlobCache[row.pdf_url || ""]);
       const openLink = document.createElement("a");
       openLink.href = "#";
       openLink.textContent = row.pdf_file;
@@ -231,12 +235,22 @@ function renderPreview() {
       const dragChip = document.createElement("span");
       dragChip.textContent = "Drag PDF";
       dragChip.className = "pdf-drag-link";
-      wirePdfDrag(dragChip, row);
+      if (ready) {
+        wirePdfDrag(dragChip, row);
+      } else {
+        dragChip.classList.add("is-disabled");
+        dragChip.title = "PDF still loading";
+      }
+
+      const readyChip = document.createElement("span");
+      readyChip.className = ready ? "pdf-ready is-ready" : "pdf-ready is-loading";
+      readyChip.textContent = ready ? "Ready" : "Loading";
 
       pdfTd.appendChild(openLink);
       pdfTd.appendChild(document.createTextNode(" "));
       pdfTd.appendChild(dragChip);
-      primePdfBlob(row);
+      pdfTd.appendChild(document.createTextNode(" "));
+      pdfTd.appendChild(readyChip);
     } else {
       pdfTd.textContent = row.pdf_file || "";
     }
@@ -314,6 +328,7 @@ $("buildBtn").addEventListener("click", async () => {
     const data = await res.json();
     clearPdfCaches();
     state.preview = data.rows || [];
+    setStatus("Preparing PDFs for drag and download...");
     await primeAllPreviewPdfs(state.preview);
     renderPreview();
     renderStats(data.stats || null);

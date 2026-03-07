@@ -329,8 +329,33 @@ a {
   cursor: grabbing;
 }
 
+.pdf-drag-link.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .pdf-open-link {
   margin-right: 6px;
+}
+
+.pdf-ready {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  border: 1px solid #b9cbc6;
+}
+
+.pdf-ready.is-ready {
+  background: #e6f7ee;
+  color: #0f7a45;
+}
+
+.pdf-ready.is-loading {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 @keyframes rise {
