@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-import subprocess
+import re
 import tempfile
 from urllib.parse import quote
 from uuid import uuid4
@@ -48,6 +48,7 @@ ingestor = SeatPlanIngestor()
 preview_download_cache: dict[str, dict[str, bytes]] = {}
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
+EMAIL_CELL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
@@ -538,58 +539,79 @@ async def _read_allocation_rows(upload: UploadFile) -> list[dict[str, str]]:
 
 
 def _convert_numbers_bytes_to_csv(numbers_blob: bytes) -> str:
+    try:
+        from numbers_parser import Document
+    except Exception as exc:
+        raise TicketBundleError(
+            "Server cannot read .numbers files yet. Install dependency: numbers-parser."
+        ) from exc
+
     with tempfile.TemporaryDirectory(prefix="ticket-bundle-") as tmp:
         in_path = Path(tmp) / "input.numbers"
-        out_base = Path(tmp) / "exported"
-        out_csv = Path(tmp) / "exported.csv"
         in_path.write_bytes(numbers_blob)
 
-        script = f"""
-            set inFile to POSIX file "{str(in_path)}"
-            set outFile to POSIX file "{str(out_csv)}"
-            tell application "Numbers"
-                set theDoc to open inFile
-                export theDoc to outFile as CSV
-                close theDoc saving no
-            end tell
-        """
         try:
-            subprocess.run(
-                ["osascript", "-e", script],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError as exc:
-            raise TicketBundleError("Could not find osascript to convert .numbers file.") from exc
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").strip()
+            doc = Document(str(in_path))
+        except Exception as exc:
             raise TicketBundleError(
-                "Failed to convert .numbers file. Ensure Apple Numbers is installed and Automation permission is allowed."
-                + (f" Details: {stderr}" if stderr else "")
+                "Failed to parse .numbers file. Ensure the file is valid and not password-protected."
             ) from exc
 
-        candidates = []
-        if out_csv.exists():
-            candidates.append(out_csv)
-        if out_base.exists():
-            candidates.append(out_base)
+        tables: list[list[list[str]]] = []
+        for sheet in doc.sheets:
+            for table in sheet.tables:
+                rows = table.rows(values_only=True)
+                normalized_rows: list[list[str]] = [
+                    [_numbers_cell_to_text(cell) for cell in row] for row in rows
+                ]
+                if any(any(cell for cell in row) for row in normalized_rows):
+                    tables.append(normalized_rows)
 
-        candidates.extend(list(Path(tmp).glob("*.csv")))
-        candidates.extend(list(Path(tmp).rglob("*.csv")))
-        candidates.extend(list(Path(tmp).glob("*.tsv")))
-        candidates.extend(list(Path(tmp).rglob("*.tsv")))
-        if not candidates:
-            raise TicketBundleError("Numbers conversion did not produce a CSV file.")
+        if not tables:
+            raise TicketBundleError("Numbers file did not contain any readable table rows.")
 
-        # If a directory export was produced, pick the first non-empty csv-like file.
-        for candidate in candidates:
-            if candidate.is_dir():
-                inner = list(candidate.rglob("*.csv")) + list(candidate.rglob("*.tsv"))
-                for file in inner:
-                    if file.exists() and file.stat().st_size > 0:
-                        return _decode_csv(file.read_bytes())
-            elif candidate.exists() and candidate.stat().st_size > 0:
-                return _decode_csv(candidate.read_bytes())
+        best_table = max(tables, key=_numbers_table_score)
+        csv_text = _rows_to_csv(best_table)
+        if not csv_text.strip():
+            raise TicketBundleError("Numbers conversion produced empty CSV data.")
+        return csv_text
 
-        raise TicketBundleError("Numbers conversion completed but no readable CSV content was found.")
+
+def _numbers_cell_to_text(cell: object) -> str:
+    if cell is None:
+        return ""
+    if isinstance(cell, bool):
+        return "TRUE" if cell else "FALSE"
+    return str(cell).strip()
+
+
+def _numbers_table_score(rows: list[list[str]]) -> tuple[int, int, int]:
+    non_empty_rows = [row for row in rows if any(cell.strip() for cell in row)]
+    if not non_empty_rows:
+        return (0, 0, 0)
+
+    email_cells = sum(
+        1
+        for row in non_empty_rows
+        for cell in row
+        if EMAIL_CELL_RE.match(cell.strip())
+    )
+    seat_like_cells = sum(
+        1
+        for row in non_empty_rows
+        for cell in row
+        if re.search(r"[A-Za-z]{1,3}\s*[- ]?\s*\d{1,3}", cell) is not None
+    )
+    return (email_cells, seat_like_cells, len(non_empty_rows))
+
+
+def _rows_to_csv(rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    width = max((len(row) for row in rows), default=0)
+    output = StringIO()
+    writer = csv.writer(output)
+    for row in rows:
+        padded = row + [""] * (width - len(row))
+        writer.writerow(padded)
+    return output.getvalue()
