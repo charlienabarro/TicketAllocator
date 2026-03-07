@@ -60,7 +60,7 @@ function buildMailtoHref(row) {
   const body = [
     "Hi,",
     "",
-    "Please find your tickets attached.",
+    "Please find your ticket link below.",
     pdfUrl ? `Ticket PDF link: ${pdfUrl}` : "",
     "",
     "Best regards,",
@@ -83,7 +83,6 @@ function wirePdfDrag(linkEl, row) {
     dt.setData("text/plain", absoluteUrl);
     dt.setData("text/uri-list", absoluteUrl);
     dt.setData("text/html", `<a href="${absoluteUrl}">${row.pdf_file || "Ticket PDF"}</a>`);
-    dt.setData("DownloadURL", `application/pdf:${row.pdf_file || "ticket.pdf"}:${absoluteUrl}`);
   });
 }
 
