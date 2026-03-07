@@ -200,17 +200,10 @@ function wirePdfDrag(linkEl, row) {
       } catch (_) {}
     }
     if (!fileAdded) {
-      const dataUrl = state.pdfDataUrlCache[key] || "";
-      const objectUrl = state.pdfObjectUrlCache[key] || "";
-      if (dataUrl) {
-        dt.setData("DownloadURL", `application/pdf:${fileName}:${dataUrl}`);
-      } else if (objectUrl) {
-        dt.setData("DownloadURL", `application/pdf:${fileName}:${objectUrl}`);
-      } else {
-        dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
-      }
+      // Native mail clients (especially Apple Mail) are most reliable with DownloadURL.
+      dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
     }
-    dt.setData("text/plain", fileName);
+    dt.setData("text/plain", "");
   });
 }
 
@@ -267,9 +260,12 @@ function renderPreview() {
         await downloadPdfToDevice(row);
       });
 
-      const dragChip = document.createElement("span");
+      const dragChip = document.createElement("a");
       dragChip.textContent = "Drag PDF";
       dragChip.className = "pdf-drag-link";
+      dragChip.href = toAbsoluteUrl(row.pdf_url);
+      dragChip.download = row.pdf_file || "ticket.pdf";
+      dragChip.addEventListener("click", (event) => event.preventDefault());
       if (ready) {
         wirePdfDrag(dragChip, row);
       } else {
