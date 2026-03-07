@@ -238,6 +238,12 @@ button.accent {
   background: linear-gradient(90deg, var(--teal), var(--teal-2));
 }
 
+#downloadAllBtn {
+  color: #124b50;
+  background: #e7f4f1;
+  border: 1px solid #b9cbc6;
+}
+
 button:disabled {
   opacity: 0.65;
   cursor: not-allowed;

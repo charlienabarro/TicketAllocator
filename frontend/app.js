@@ -122,7 +122,7 @@ async function downloadPdfToDevice(row) {
   const blob = state.pdfBlobCache[key];
   if (!blob) {
     setStatus("PDF is not ready yet. Rebuild preview and try again.", true);
-    return;
+    return false;
   }
 
   const objectUrl = URL.createObjectURL(blob);
@@ -133,6 +133,7 @@ async function downloadPdfToDevice(row) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
+  return true;
 }
 
 function blobToDataUrl(blob) {
@@ -163,6 +164,22 @@ function clearPdfCaches() {
   state.pdfObjectUrlCache = {};
   state.pdfDataUrlCache = {};
   state.pdfStateByUrl = {};
+}
+
+async function downloadAllPreviewPdfs() {
+  if (!state.preview.length) {
+    setStatus("Build a preview first.", true);
+    return;
+  }
+  let done = 0;
+  for (const row of state.preview) {
+    if (!row.pdf_url) continue;
+    await primePdfBlob(row);
+    const ok = await downloadPdfToDevice(row);
+    if (ok) done += 1;
+    await new Promise((resolve) => setTimeout(resolve, 140));
+  }
+  setStatus(`Downloaded ${done} PDF file(s).`);
 }
 
 function wirePdfDrag(linkEl, row) {
@@ -246,6 +263,12 @@ function renderPreview() {
       const mailLink = document.createElement("a");
       mailLink.href = buildMailtoHref(row);
       mailLink.textContent = row.email;
+      mailLink.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const ok = await downloadPdfToDevice(row);
+        if (!ok) return;
+        window.location.href = buildMailtoHref(row);
+      });
       emailTd.appendChild(mailLink);
     } else {
       emailTd.textContent = "";
@@ -394,3 +417,6 @@ $("buildBtn").addEventListener("click", async () => {
 
 $("allocationCsvFile").addEventListener("change", maybePrefillShowName);
 $("ticketsPdfFile").addEventListener("change", maybePrefillShowName);
+$("downloadAllBtn").addEventListener("click", async () => {
+  await downloadAllPreviewPdfs();
+});
