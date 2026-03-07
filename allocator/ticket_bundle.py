@@ -12,6 +12,7 @@ SEAT_TOKEN_RE_REVERSED = re.compile(r"\b(\d{1,3})\s*[- ]?\s*([A-Za-z]{1,3})\b")
 ROW_SEAT_LABEL_RE = re.compile(r"\bROW\b[\s:.-]*([A-Za-z]{1,3})[\s|/,-]*\bSEAT\b[\s:.-]*(\d{1,3})\b", re.IGNORECASE)
 SEAT_ROW_LABEL_RE = re.compile(r"\bSEAT\b[\s:.-]*(\d{1,3})[\s|/,-]*\bROW\b[\s:.-]*([A-Za-z]{1,3})\b", re.IGNORECASE)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+EMAIL_EXTRACT_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 SECTION_HINT_PATTERN = r"(?:STALLS|CIRCLE|DRESS|GRAND|UPPER|LOWER|BALCONY|MEZZANINE|BOX|PIT|GALLERY|SECTION)"
 SECTION_HINT_RE = re.compile(
     rf"\b{SECTION_HINT_PATTERN}\b",
@@ -143,12 +144,13 @@ def _parse_allocation_csv_with_headers(content: str) -> list[dict[str, str]]:
     )
 
     rows: list[dict[str, str]] = []
-    last_email = ""
+    last_emails: list[str] = []
     last_customer_name = ""
     last_booking_ref = ""
     for raw in reader:
         booking_ref = (raw.get(booking_col, "") or "").strip() if booking_col else ""
-        email = (raw.get(email_col, "") or "").strip()
+        email_cell = (raw.get(email_col, "") or "").strip()
+        emails = _extract_emails(email_cell)
         customer_name = (raw.get(name_col, "") or "").strip() if name_col else ""
         if _looks_like_unknown_name(customer_name):
             customer_name = ""
@@ -161,23 +163,24 @@ def _parse_allocation_csv_with_headers(content: str) -> list[dict[str, str]]:
         if seats_raw:
             if not booking_ref and last_booking_ref:
                 booking_ref = last_booking_ref
-            if not email and last_email:
-                email = last_email
+            if not emails and last_emails:
+                emails = list(last_emails)
             if not customer_name and last_customer_name:
                 customer_name = last_customer_name
 
-        if not email:
+        if not emails:
             continue
 
-        row = {
-            "booking_reference": booking_ref,
-            "customer_name": customer_name,
-            "email": email,
-            "seats_raw": seats_raw,
-        }
-        rows.append(row)
+        for email in emails:
+            row = {
+                "booking_reference": booking_ref,
+                "customer_name": customer_name,
+                "email": email,
+                "seats_raw": seats_raw,
+            }
+            rows.append(row)
 
-        last_email = email
+        last_emails = list(emails)
         if customer_name:
             last_customer_name = customer_name
         if booking_ref:
@@ -211,7 +214,7 @@ def _parse_allocation_csv_without_headers(content: str) -> list[dict[str, str]]:
         seat_count = 0
         for row in matrix:
             value = get_cell(row, col)
-            if _is_email(value):
+            if _extract_emails(value):
                 email_count += 1
             if _looks_like_seat_cell(value):
                 seat_count += 1
@@ -239,11 +242,11 @@ def _parse_allocation_csv_without_headers(content: str) -> list[dict[str, str]]:
     name_col = _infer_name_column(matrix, email_col=email_col, excluded=excluded)
 
     rows: list[dict[str, str]] = []
-    last_email = ""
+    last_emails: list[str] = []
     last_customer_name = ""
     last_booking_ref = ""
     for idx, row in enumerate(matrix):
-        email = get_cell(row, email_col)
+        emails = _extract_emails(get_cell(row, email_col))
         customer_name = get_cell(row, name_col) if name_col is not None else ""
         if _looks_like_unknown_name(customer_name):
             customer_name = ""
@@ -259,23 +262,24 @@ def _parse_allocation_csv_without_headers(content: str) -> list[dict[str, str]]:
         if seats_raw:
             if not booking_ref and last_booking_ref:
                 booking_ref = last_booking_ref
-            if not _is_email(email) and last_email:
-                email = last_email
+            if not emails and last_emails:
+                emails = list(last_emails)
             if not customer_name and last_customer_name:
                 customer_name = last_customer_name
 
-        if not _is_email(email):
+        if not emails:
             continue
 
-        rows.append(
-            {
-                "booking_reference": booking_ref or "",
-                "customer_name": customer_name,
-                "email": email,
-                "seats_raw": seats_raw,
-            }
-        )
-        last_email = email
+        for email in emails:
+            rows.append(
+                {
+                    "booking_reference": booking_ref or "",
+                    "customer_name": customer_name,
+                    "email": email,
+                    "seats_raw": seats_raw,
+                }
+            )
+        last_emails = list(emails)
         if customer_name:
             last_customer_name = customer_name
         if booking_ref:
@@ -785,7 +789,7 @@ def _infer_name_column(matrix: list[list[str]], email_col: int, excluded: set[in
             value = get_cell(row, col)
             if not value:
                 continue
-            if _is_email(value):
+            if _extract_emails(value):
                 continue
             if _looks_like_seat_cell(value):
                 continue
@@ -825,6 +829,23 @@ def _find_column(normalized_headers: dict[str, str], aliases: list[str], require
 
 def _is_email(value: str) -> bool:
     return bool(EMAIL_RE.match(value.strip()))
+
+
+def _extract_emails(value: str) -> list[str]:
+    if not value:
+        return []
+    emails = [match.group(0).strip() for match in EMAIL_EXTRACT_RE.finditer(value)]
+    if not emails and _is_email(value):
+        emails = [value.strip()]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for email in emails:
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(email)
+    return deduped
 
 
 def _looks_like_seat_cell(value: str) -> bool:
@@ -897,12 +918,13 @@ def _infer_split_seat_columns(matrix: list[list[str]], email_col: int) -> tuple[
 
 
 def _build_manifest_csv(groups: list[BookingTicketGroup]) -> str:
+    filenames = build_output_filenames(groups)
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(["Email", "PDF File"])
 
-    for group in groups:
-        writer.writerow([group.email, output_pdf_filename(group)])
+    for group, filename in zip(groups, filenames):
+        writer.writerow([group.email, filename])
 
     return output.getvalue()
 
@@ -929,6 +951,31 @@ def output_pdf_filename(group: BookingTicketGroup) -> str:
 
     safe_booking_ref = _safe_filename(group.booking_reference or "booking")
     return f"{safe_booking_ref}_tickets.pdf"
+
+
+def build_output_filenames(groups: list[BookingTicketGroup]) -> list[str]:
+    used: set[str] = set()
+    output: list[str] = []
+    duplicate_counts: dict[str, int] = {}
+
+    for group in groups:
+        base = output_pdf_filename(group)
+        candidate = base
+
+        if candidate in used:
+            duplicate_counts[base] = duplicate_counts.get(base, 1) + 1
+            suffix = _safe_filename((group.email or "").split("@")[0])
+            if suffix:
+                stem = base[:-4] if base.lower().endswith(".pdf") else base
+                candidate = f"{stem}_{suffix}.pdf"
+            if candidate in used:
+                stem = base[:-4] if base.lower().endswith(".pdf") else base
+                candidate = f"{stem}_{duplicate_counts[base]}.pdf"
+
+        used.add(candidate)
+        output.append(candidate)
+
+    return output
 
 
 def _load_pdf_backend():

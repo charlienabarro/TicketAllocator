@@ -22,11 +22,11 @@ from allocator.seat_plan_ingestion import SeatPlanIngestor
 from allocator.seat_range_expander import expand_ticket_stock_rows
 from allocator.ticket_bundle import (
     TicketBundleError,
+    build_output_filenames,
     build_booking_groups,
     build_group_pdf,
     build_bundle_zip,
     extract_pdf_page_seat_map,
-    output_pdf_filename,
     parse_allocation_csv,
     parse_seat_list,
 )
@@ -72,7 +72,8 @@ async def preview_ticket_bundle(
     except TicketBundleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    preview_id = _store_preview_pdfs(pdf_content, groups)
+    filenames = build_output_filenames(groups)
+    preview_id = _store_preview_pdfs(pdf_content, groups, filenames)
     missing_unique = {seat for group in groups for seat in group.missing_seats}
     matched_unique = {seat for group in groups for seat in group.seat_labels if seat in seat_map}
 
@@ -80,10 +81,10 @@ async def preview_ticket_bundle(
         "rows": [
             {
                 "email": group.email,
-                "pdf_file": output_pdf_filename(group),
-                "pdf_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(output_pdf_filename(group))}",
+                "pdf_file": filename,
+                "pdf_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}",
             }
-            for group in groups
+            for group, filename in zip(groups, filenames)
         ],
         "failures": [
             {
@@ -511,11 +512,10 @@ def _expected_seat_labels(allocation_rows: list[dict[str, str]]) -> set[str]:
     return labels
 
 
-def _store_preview_pdfs(pdf_content: bytes, groups) -> str:
+def _store_preview_pdfs(pdf_content: bytes, groups, filenames: list[str]) -> str:
     preview_id = uuid4().hex
     files: dict[str, bytes] = {}
-    for group in groups:
-        name = output_pdf_filename(group)
+    for group, name in zip(groups, filenames):
         files[name] = build_group_pdf(pdf_content, group)
     preview_download_cache[preview_id] = files
 

@@ -5,6 +5,7 @@ from allocator.ticket_bundle import (
     _extract_seat_tokens,
     _extract_seat_tokens_from_pdf_content_data,
     _normalize_seat_labels,
+    build_output_filenames,
     build_booking_groups,
     output_pdf_filename,
     parse_allocation_csv,
@@ -99,6 +100,34 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(rows[0]["email"], "jane@example.com")
         self.assertEqual(rows[0]["seats_raw"], "C12")
 
+    def test_parse_allocation_with_multiple_emails_in_single_cell(self) -> None:
+        csv_content = (
+            "Booking Ref,Customer Name,Email,Assigned Seats\n"
+            "B200,Jo Porter,danporter.contact@gmail.com theporterfamily1@sky.com,D64\n"
+        )
+        rows = parse_allocation_csv(csv_content)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["email"], "danporter.contact@gmail.com")
+        self.assertEqual(rows[1]["email"], "theporterfamily1@sky.com")
+        self.assertEqual(rows[0]["seats_raw"], "D64")
+        self.assertEqual(rows[1]["seats_raw"], "D64")
+
+    def test_parse_allocation_fills_down_all_emails_from_multi_email_row(self) -> None:
+        csv_content = (
+            "Booking Ref,Customer Name,Email,Assigned Seats\n"
+            "B200,Jo Porter,danporter.contact@gmail.com theporterfamily1@sky.com,D64\n"
+            ",,,D65\n"
+        )
+        rows = parse_allocation_csv(csv_content)
+        self.assertEqual(len(rows), 4)
+        self.assertEqual([r["email"] for r in rows], [
+            "danporter.contact@gmail.com",
+            "theporterfamily1@sky.com",
+            "danporter.contact@gmail.com",
+            "theporterfamily1@sky.com",
+        ])
+        self.assertEqual([r["seats_raw"] for r in rows], ["D64", "D64", "D65", "D65"])
+
     def test_parse_allocation_without_booking_ref(self) -> None:
         csv_content = """Customer Name,Email,Assigned Seats\nJane,jane@example.com,C1-C2\n"""
         rows = parse_allocation_csv(csv_content)
@@ -148,6 +177,17 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["seats_raw"], "C12")
         self.assertEqual(rows[1]["seats_raw"], "D5")
+
+    def test_parse_allocation_without_headers_splits_multiple_emails(self) -> None:
+        csv_content = (
+            "BOOK2001,Jo Porter,danporter.contact@gmail.com theporterfamily1@sky.com,D64\n"
+            "BOOK2002,Jane,jane@example.com,C1\n"
+        )
+        rows = parse_allocation_csv(csv_content)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["email"], "danporter.contact@gmail.com")
+        self.assertEqual(rows[1]["email"], "theporterfamily1@sky.com")
+        self.assertEqual(rows[0]["seats_raw"], "D64")
 
     def test_parse_allocation_without_headers_keeps_email_rows_with_blank_seats(self) -> None:
         csv_content = (
@@ -270,6 +310,27 @@ class TicketBundleTests(unittest.TestCase):
         seat_to_page = {"C1": 0}
         groups = build_booking_groups(rows, seat_to_page)
         self.assertEqual(output_pdf_filename(groups[0]), "sue_example.com.pdf")
+
+    def test_build_output_filenames_disambiguates_duplicate_customer_names(self) -> None:
+        rows = [
+            {
+                "booking_reference": "B200",
+                "customer_name": "Jo Porter",
+                "email": "danporter.contact@gmail.com",
+                "seats_raw": "D64",
+            },
+            {
+                "booking_reference": "B200",
+                "customer_name": "Jo Porter",
+                "email": "theporterfamily1@sky.com",
+                "seats_raw": "D64",
+            },
+        ]
+        seat_to_page = {"D64": 0}
+        groups = build_booking_groups(rows, seat_to_page)
+        names = build_output_filenames(groups)
+        self.assertEqual(names[0], "Jo_Porter_tickets.pdf")
+        self.assertEqual(names[1], "Jo_Porter_tickets_theporterfamily1.pdf")
 
 
 if __name__ == "__main__":
