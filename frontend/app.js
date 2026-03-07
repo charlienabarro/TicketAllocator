@@ -3,6 +3,7 @@ const state = {
   showName: "",
   pdfBlobCache: {},
   pdfBlobLoads: {},
+  pdfObjectUrlCache: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -82,6 +83,9 @@ async function primePdfBlob(row) {
       if (!res.ok) return null;
       const blob = await res.blob();
       state.pdfBlobCache[key] = blob;
+      if (!state.pdfObjectUrlCache[key]) {
+        state.pdfObjectUrlCache[key] = URL.createObjectURL(blob);
+      }
       return blob;
     } catch (_) {
       return null;
@@ -117,6 +121,17 @@ async function primeAllPreviewPdfs(rows) {
   await Promise.all(tasks);
 }
 
+function clearPdfCaches() {
+  for (const key of Object.keys(state.pdfObjectUrlCache)) {
+    try {
+      URL.revokeObjectURL(state.pdfObjectUrlCache[key]);
+    } catch (_) {}
+  }
+  state.pdfBlobCache = {};
+  state.pdfBlobLoads = {};
+  state.pdfObjectUrlCache = {};
+}
+
 function wirePdfDrag(linkEl, row) {
   const absoluteUrl = toAbsoluteUrl(row.pdf_url || "");
   if (!absoluteUrl) return;
@@ -134,9 +149,16 @@ function wirePdfDrag(linkEl, row) {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
-    let fileAdded = false;
-    const cached = state.pdfBlobCache[row.pdf_url || ""];
+    const key = row.pdf_url || "";
+    const cached = state.pdfBlobCache[key];
     const fileName = row.pdf_file || "ticket.pdf";
+    if (!cached) {
+      event.preventDefault();
+      setStatus("PDF still loading. Try drag again in a moment.", true);
+      primePdfBlob(row);
+      return;
+    }
+    let fileAdded = false;
     if (cached && dt.items && dt.items.add) {
       try {
         const file = new File([cached], fileName, { type: "application/pdf" });
@@ -145,7 +167,12 @@ function wirePdfDrag(linkEl, row) {
       } catch (_) {}
     }
     if (!fileAdded) {
-      dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
+      const objectUrl = state.pdfObjectUrlCache[key] || "";
+      if (objectUrl) {
+        dt.setData("DownloadURL", `application/pdf:${fileName}:${objectUrl}`);
+      } else {
+        dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
+      }
     }
     dt.setData("text/plain", "");
   });
@@ -285,6 +312,7 @@ $("buildBtn").addEventListener("click", async () => {
     state.showName = detectShowName();
     const res = await uploadAndFetch("/ticket-bundles/preview");
     const data = await res.json();
+    clearPdfCaches();
     state.preview = data.rows || [];
     await primeAllPreviewPdfs(state.preview);
     renderPreview();
