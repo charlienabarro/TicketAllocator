@@ -36,6 +36,11 @@ class TicketBundleTests(unittest.TestCase):
         parsed = _extract_seat_tokens(text)
         self.assertEqual(parsed, ["J11"])
 
+    def test_extract_seat_tokens_from_reversed_split_lines_with_section_before(self) -> None:
+        text = "ROYAL CIRCLE\n4\nD\n"
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["D4"])
+
     def test_extract_seat_tokens_from_pdf_content_stream_literals(self) -> None:
         content = b"BT (J) Tj ET BT (11) Tj ET BT (STALLS) Tj ET"
         parsed = _extract_seat_tokens_from_pdf_content_data(content)
@@ -62,6 +67,11 @@ class TicketBundleTests(unittest.TestCase):
         text = "Mon 16 Mar 2026 19:00 Dress Circle B1Paddington The Musical"
         parsed = _extract_seat_tokens(text)
         self.assertEqual(parsed, ["B1"])
+
+    def test_extract_seat_tokens_from_compact_token_before_order(self) -> None:
+        text = "RoStalls A18Order 38238468"
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["A18"])
 
     def test_extract_seat_tokens_ignores_postcode_tokens(self) -> None:
         text = "Stalls C4C4Stalls Criterion Theatre, London SW1V 9LB"

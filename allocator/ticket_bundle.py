@@ -26,6 +26,9 @@ ROW_SEAT_SECTION_RE = re.compile(
 COMPACT_SEAT_AFTER_SECTION_RE = re.compile(
     rf"(?i)\b{SECTION_HINT_PATTERN}\s+([A-Za-z]{{1,3}})\s*(\d{{1,3}})(?=[A-Za-z]|$)"
 )
+SEAT_BEFORE_ORDER_RE = re.compile(
+    r"(?i)\b([A-Za-z]{1,3})\s*[- ]?\s*(\d{1,3})(?=\s*ORDER(?:\b|[A-Z]))"
+)
 RESERVED_ROW_TOKENS = {
     "AM",
     "PM",
@@ -482,6 +485,10 @@ def _extract_seat_tokens(text: str) -> list[str]:
         token = _seat_token(m.group(1), m.group(2))
         if token:
             out.append(token)
+    for m in SEAT_BEFORE_ORDER_RE.finditer(text):
+        token = _seat_token(m.group(1), m.group(2))
+        if token:
+            out.append(token)
 
     if out:
         return _dedupe_seat_tokens(out)
@@ -676,14 +683,14 @@ def _extract_seats_from_token_sequence(tokens: list[str]) -> list[str]:
         second = tokens[idx + 1]
 
         if _is_row_token(first) and _is_seat_number_token(second):
-            if _has_section_hint_nearby(tokens, idx + 2):
+            if _has_section_hint_nearby(tokens, idx):
                 seat = _seat_token(first, second)
                 if seat:
                     out.append(seat)
                 continue
 
         if _is_seat_number_token(first) and _is_row_token(second):
-            if _has_section_hint_nearby(tokens, idx + 2):
+            if _has_section_hint_nearby(tokens, idx):
                 seat = _seat_token(second, first)
                 if seat:
                     out.append(seat)
@@ -710,9 +717,10 @@ def _is_seat_number_token(token: str) -> bool:
     return bool(re.fullmatch(r"\d{1,3}", token.strip()))
 
 
-def _has_section_hint_nearby(tokens: list[str], start_index: int) -> bool:
-    end = min(len(tokens), start_index + 8)
-    for idx in range(start_index, end):
+def _has_section_hint_nearby(tokens: list[str], anchor_index: int, radius: int = 8) -> bool:
+    start = max(0, anchor_index - radius)
+    end = min(len(tokens), anchor_index + radius + 1)
+    for idx in range(start, end):
         if SECTION_HINT_RE.fullmatch(tokens[idx].strip().upper()):
             return True
     return False
