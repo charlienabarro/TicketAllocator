@@ -4,6 +4,8 @@ const state = {
   pdfBlobCache: {},
   pdfBlobLoads: {},
   pdfObjectUrlCache: {},
+  pdfDataUrlCache: {},
+  pdfStateByUrl: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -76,18 +78,34 @@ async function primePdfBlob(row) {
   if (!key) return null;
   if (state.pdfBlobCache[key]) return state.pdfBlobCache[key];
   if (state.pdfBlobLoads[key]) return state.pdfBlobLoads[key];
+  state.pdfStateByUrl[key] = "loading";
 
   state.pdfBlobLoads[key] = (async () => {
     try {
-      const res = await fetch(toAbsoluteUrl(key));
-      if (!res.ok) return null;
-      const blob = await res.blob();
+      let blob = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const res = await fetch(toAbsoluteUrl(key), { cache: "no-store" });
+          if (!res.ok) continue;
+          blob = await res.blob();
+          if (blob && blob.size > 0) break;
+        } catch (_) {}
+      }
+      if (!blob || blob.size === 0) {
+        state.pdfStateByUrl[key] = "failed";
+        return null;
+      }
       state.pdfBlobCache[key] = blob;
       if (!state.pdfObjectUrlCache[key]) {
         state.pdfObjectUrlCache[key] = URL.createObjectURL(blob);
       }
+      if (!state.pdfDataUrlCache[key]) {
+        state.pdfDataUrlCache[key] = await blobToDataUrl(blob);
+      }
+      state.pdfStateByUrl[key] = "ready";
       return blob;
     } catch (_) {
+      state.pdfStateByUrl[key] = "failed";
       return null;
     } finally {
       delete state.pdfBlobLoads[key];
@@ -117,11 +135,21 @@ async function downloadPdfToDevice(row) {
   setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
 }
 
-async function primeAllPreviewPdfs(rows) {
-  const tasks = rows
-    .filter((row) => row && row.pdf_url)
-    .map((row) => primePdfBlob(row));
-  await Promise.all(tasks);
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function primeAllPreviewPdfs(rows, onProgress) {
+  const list = rows.filter((row) => row && row.pdf_url);
+  for (let idx = 0; idx < list.length; idx += 1) {
+    await primePdfBlob(list[idx]);
+    if (onProgress) onProgress(idx + 1, list.length);
+  }
 }
 
 function clearPdfCaches() {
@@ -133,6 +161,8 @@ function clearPdfCaches() {
   state.pdfBlobCache = {};
   state.pdfBlobLoads = {};
   state.pdfObjectUrlCache = {};
+  state.pdfDataUrlCache = {};
+  state.pdfStateByUrl = {};
 }
 
 function wirePdfDrag(linkEl, row) {
@@ -170,14 +200,17 @@ function wirePdfDrag(linkEl, row) {
       } catch (_) {}
     }
     if (!fileAdded) {
+      const dataUrl = state.pdfDataUrlCache[key] || "";
       const objectUrl = state.pdfObjectUrlCache[key] || "";
-      if (objectUrl) {
+      if (dataUrl) {
+        dt.setData("DownloadURL", `application/pdf:${fileName}:${dataUrl}`);
+      } else if (objectUrl) {
         dt.setData("DownloadURL", `application/pdf:${fileName}:${objectUrl}`);
       } else {
         dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
       }
     }
-    dt.setData("text/plain", "");
+    dt.setData("text/plain", fileName);
   });
 }
 
@@ -222,7 +255,9 @@ function renderPreview() {
 
     const pdfTd = document.createElement("td");
     if (row.pdf_url && row.pdf_file) {
-      const ready = Boolean(state.pdfBlobCache[row.pdf_url || ""]);
+      const key = row.pdf_url || "";
+      const loadState = state.pdfStateByUrl[key] || "loading";
+      const ready = loadState === "ready";
       const openLink = document.createElement("a");
       openLink.href = "#";
       openLink.textContent = row.pdf_file;
@@ -239,12 +274,20 @@ function renderPreview() {
         wirePdfDrag(dragChip, row);
       } else {
         dragChip.classList.add("is-disabled");
-        dragChip.title = "PDF still loading";
+        dragChip.title = loadState === "failed" ? "Failed to load PDF" : "PDF still loading";
       }
 
       const readyChip = document.createElement("span");
-      readyChip.className = ready ? "pdf-ready is-ready" : "pdf-ready is-loading";
-      readyChip.textContent = ready ? "Ready" : "Loading";
+      if (loadState === "ready") {
+        readyChip.className = "pdf-ready is-ready";
+        readyChip.textContent = "Ready";
+      } else if (loadState === "failed") {
+        readyChip.className = "pdf-ready is-failed";
+        readyChip.textContent = "Failed";
+      } else {
+        readyChip.className = "pdf-ready is-loading";
+        readyChip.textContent = "Loading";
+      }
 
       pdfTd.appendChild(openLink);
       pdfTd.appendChild(document.createTextNode(" "));
@@ -328,9 +371,11 @@ $("buildBtn").addEventListener("click", async () => {
     const data = await res.json();
     clearPdfCaches();
     state.preview = data.rows || [];
-    setStatus("Preparing PDFs for drag and download...");
-    await primeAllPreviewPdfs(state.preview);
     renderPreview();
+    await primeAllPreviewPdfs(state.preview, (done, total) => {
+      renderPreview();
+      setStatus(`Preparing PDFs for drag and download... ${done}/${total}`);
+    });
     renderStats(data.stats || null);
 
     const failures = data.failures || [];

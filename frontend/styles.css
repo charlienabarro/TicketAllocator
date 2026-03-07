@@ -358,6 +358,11 @@ a {
   color: #92400e;
 }
 
+.pdf-ready.is-failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
