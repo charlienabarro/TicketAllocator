@@ -166,8 +166,8 @@ function clearPdfCaches() {
 }
 
 function wirePdfDrag(linkEl, row) {
-  const absoluteUrl = toAbsoluteUrl(row.pdf_url || "");
-  if (!absoluteUrl) return;
+  const key = row.pdf_url || "";
+  if (!key) return;
   linkEl.draggable = true;
   linkEl.title = "Drag to attach PDF";
 
@@ -182,7 +182,6 @@ function wirePdfDrag(linkEl, row) {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
-    const key = row.pdf_url || "";
     const cached = state.pdfBlobCache[key];
     const fileName = row.pdf_file || "ticket.pdf";
     if (!cached) {
@@ -200,8 +199,14 @@ function wirePdfDrag(linkEl, row) {
       } catch (_) {}
     }
     if (!fileAdded) {
-      // Native mail clients (especially Apple Mail) are most reliable with DownloadURL.
-      dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
+      const dataUrl = state.pdfDataUrlCache[key] || "";
+      if (!dataUrl) {
+        event.preventDefault();
+        setStatus("Could not prepare local PDF payload for drag. Use PDF name to download.", true);
+        return;
+      }
+      dt.setData("DownloadURL", `application/pdf:${fileName}:${dataUrl}`);
+      dt.setData("text/uri-list", dataUrl);
     }
     dt.setData("text/plain", "");
   });
@@ -263,7 +268,7 @@ function renderPreview() {
       const dragChip = document.createElement("a");
       dragChip.textContent = "Drag PDF";
       dragChip.className = "pdf-drag-link";
-      dragChip.href = toAbsoluteUrl(row.pdf_url);
+      dragChip.href = ready ? (state.pdfDataUrlCache[key] || "#") : "#";
       dragChip.download = row.pdf_file || "ticket.pdf";
       dragChip.addEventListener("click", (event) => event.preventDefault());
       if (ready) {
