@@ -1,5 +1,6 @@
 const state = {
   preview: [],
+  showName: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -17,6 +18,48 @@ function getFiles() {
     throw new Error("Please select both allocation CSV and tickets PDF.");
   }
   return { csvFile, pdfFile };
+}
+
+function inferShowNameFromFileName(name) {
+  if (!name) return "";
+  let base = name.replace(/\.[^.]+$/, "").trim();
+  base = base.replace(/\s+\(\d+\)\s*[A-Za-z]?$/, "").trim();
+  const parts = base.split(/\s+-\s+/);
+  return (parts[0] || base).trim();
+}
+
+function detectShowName() {
+  const manual = $("showNameInput").value.trim();
+  if (manual) return manual;
+
+  const csvName = $("allocationCsvFile").files[0]?.name || "";
+  const pdfName = $("ticketsPdfFile").files[0]?.name || "";
+  return inferShowNameFromFileName(csvName) || inferShowNameFromFileName(pdfName) || "Show";
+}
+
+function maybePrefillShowName() {
+  const input = $("showNameInput");
+  if (input.value.trim()) return;
+  input.value = detectShowName();
+}
+
+function buildMailtoHref(row) {
+  const email = (row.email || "").trim();
+  if (!email) return "";
+  const showName = state.showName || "Show";
+  const subject = `${showName} tickets`;
+  const pdfUrl = row.pdf_url ? new URL(row.pdf_url, window.location.origin).toString() : "";
+  const body = [
+    "Hi,",
+    "",
+    "Please find your tickets attached.",
+    pdfUrl ? `Ticket PDF link: ${pdfUrl}` : "",
+    "",
+    "Best regards,",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 async function uploadAndFetch(path) {
@@ -49,7 +92,14 @@ function renderPreview() {
   for (const row of state.preview) {
     const tr = document.createElement("tr");
     const emailTd = document.createElement("td");
-    emailTd.textContent = row.email || "";
+    if (row.email) {
+      const mailLink = document.createElement("a");
+      mailLink.href = buildMailtoHref(row);
+      mailLink.textContent = row.email;
+      emailTd.appendChild(mailLink);
+    } else {
+      emailTd.textContent = "";
+    }
 
     const pdfTd = document.createElement("td");
     if (row.pdf_url && row.pdf_file) {
@@ -130,6 +180,8 @@ function setBuildLoading(isLoading) {
 $("buildBtn").addEventListener("click", async () => {
   setBuildLoading(true);
   try {
+    maybePrefillShowName();
+    state.showName = detectShowName();
     const res = await uploadAndFetch("/ticket-bundles/preview");
     const data = await res.json();
     state.preview = data.rows || [];
@@ -148,3 +200,6 @@ $("buildBtn").addEventListener("click", async () => {
     setBuildLoading(false);
   }
 });
+
+$("allocationCsvFile").addEventListener("change", maybePrefillShowName);
+$("ticketsPdfFile").addEventListener("change", maybePrefillShowName);

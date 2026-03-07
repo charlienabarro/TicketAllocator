@@ -44,6 +44,11 @@
         </label>
         <p class="meta">Use one ticket per page with seat text embedded in the PDF.</p>
 
+        <label class="field stack">Show Name (Email Subject)
+          <input id="showNameInput" type="text" placeholder="Auto-detected from file name" />
+        </label>
+        <p class="meta">Subject format: `Show Name tickets`.</p>
+
         <div class="actions">
           <button id="buildBtn" class="accent">Build Email PDF List</button>
         </div>
@@ -64,7 +69,7 @@
           <table id="previewTable">
             <thead>
               <tr>
-                <th>Email</th>
+                <th>Email (Compose)</th>
                 <th>PDF File</th>
               </tr>
             </thead>
@@ -73,6 +78,7 @@
         </div>
 
         <p id="previewStats" class="meta"></p>
+        <p class="meta">Click an email to open a prefilled draft. Attachments still need to be added manually by your mail client.</p>
         <p id="previewFailures" class="meta"></p>
 
         <div id="previewFailureDetails" class="table-wrap" hidden>
