@@ -80,6 +80,23 @@ async function primePdfBlob(row) {
   } catch (_) {}
 }
 
+async function downloadPdfToDevice(row) {
+  const key = row.pdf_url || "";
+  if (!key) return;
+  await primePdfBlob(row);
+  const blob = state.pdfBlobCache[key];
+  if (!blob) return;
+
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = row.pdf_file || "ticket.pdf";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
+}
+
 function wirePdfDrag(linkEl, row) {
   const absoluteUrl = toAbsoluteUrl(row.pdf_url || "");
   if (!absoluteUrl) return;
@@ -105,10 +122,8 @@ function wirePdfDrag(linkEl, row) {
         dt.items.add(file);
       } catch (_) {}
     }
-    // Fallback payloads for clients that don't accept file drags from browser.
-    dt.setData("text/plain", absoluteUrl);
-    dt.setData("text/uri-list", absoluteUrl);
-    dt.setData("text/html", `<a href="${absoluteUrl}">${fileName}</a>`);
+    // Keep fallback text local-only (no website URL injected into email body).
+    dt.setData("text/plain", fileName);
   });
 }
 
@@ -154,11 +169,13 @@ function renderPreview() {
     const pdfTd = document.createElement("td");
     if (row.pdf_url && row.pdf_file) {
       const openLink = document.createElement("a");
-      openLink.href = row.pdf_url;
+      openLink.href = "#";
       openLink.textContent = row.pdf_file;
-      openLink.target = "_blank";
-      openLink.rel = "noopener noreferrer";
       openLink.className = "pdf-open-link";
+      openLink.addEventListener("click", async (event) => {
+        event.preventDefault();
+        await downloadPdfToDevice(row);
+      });
 
       const dragChip = document.createElement("span");
       dragChip.textContent = "Drag PDF";
@@ -168,6 +185,7 @@ function renderPreview() {
       pdfTd.appendChild(openLink);
       pdfTd.appendChild(document.createTextNode(" "));
       pdfTd.appendChild(dragChip);
+      primePdfBlob(row);
     } else {
       pdfTd.textContent = row.pdf_file || "";
     }
