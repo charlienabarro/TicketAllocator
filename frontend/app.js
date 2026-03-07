@@ -43,12 +43,20 @@ function maybePrefillShowName() {
   input.value = detectShowName();
 }
 
+function toAbsoluteUrl(pathOrUrl) {
+  try {
+    return new URL(pathOrUrl, window.location.origin).toString();
+  } catch (_) {
+    return pathOrUrl || "";
+  }
+}
+
 function buildMailtoHref(row) {
   const email = (row.email || "").trim();
   if (!email) return "";
   const showName = state.showName || "Show";
   const subject = `${showName} tickets`;
-  const pdfUrl = row.pdf_url ? new URL(row.pdf_url, window.location.origin).toString() : "";
+  const pdfUrl = row.pdf_url ? toAbsoluteUrl(row.pdf_url) : "";
   const body = [
     "Hi,",
     "",
@@ -60,6 +68,23 @@ function buildMailtoHref(row) {
     .filter(Boolean)
     .join("\n");
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function wirePdfDrag(linkEl, row) {
+  const absoluteUrl = toAbsoluteUrl(row.pdf_url || "");
+  if (!absoluteUrl) return;
+  linkEl.draggable = true;
+  linkEl.title = "Drag this PDF link into Gmail";
+
+  linkEl.addEventListener("dragstart", (event) => {
+    const dt = event.dataTransfer;
+    if (!dt) return;
+    dt.effectAllowed = "copy";
+    dt.setData("text/plain", absoluteUrl);
+    dt.setData("text/uri-list", absoluteUrl);
+    dt.setData("text/html", `<a href="${absoluteUrl}">${row.pdf_file || "Ticket PDF"}</a>`);
+    dt.setData("DownloadURL", `application/pdf:${row.pdf_file || "ticket.pdf"}:${absoluteUrl}`);
+  });
 }
 
 async function uploadAndFetch(path) {
@@ -108,6 +133,8 @@ function renderPreview() {
       link.textContent = row.pdf_file;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
+      link.className = "pdf-drag-link";
+      wirePdfDrag(link, row);
       pdfTd.appendChild(link);
     } else {
       pdfTd.textContent = row.pdf_file || "";

@@ -312,6 +312,14 @@ a {
   text-underline-offset: 2px;
 }
 
+.pdf-drag-link {
+  cursor: grab;
+}
+
+.pdf-drag-link:active {
+  cursor: grabbing;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
