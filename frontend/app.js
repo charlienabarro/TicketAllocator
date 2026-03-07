@@ -1,6 +1,7 @@
 const state = {
   preview: [],
   showName: "",
+  pdfBlobCache: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -56,12 +57,10 @@ function buildMailtoHref(row) {
   if (!email) return "";
   const showName = state.showName || "Show";
   const subject = `${showName} tickets`;
-  const pdfUrl = row.pdf_url ? toAbsoluteUrl(row.pdf_url) : "";
   const body = [
     "Hi,",
     "",
-    "Please find your ticket link below.",
-    pdfUrl ? `Ticket PDF link: ${pdfUrl}` : "",
+    "Please find your tickets attached.",
     "",
     "Best regards,",
   ]
@@ -70,19 +69,46 @@ function buildMailtoHref(row) {
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+async function primePdfBlob(row) {
+  const key = row.pdf_url || "";
+  if (!key || state.pdfBlobCache[key]) return;
+  try {
+    const res = await fetch(toAbsoluteUrl(key));
+    if (!res.ok) return;
+    const blob = await res.blob();
+    state.pdfBlobCache[key] = blob;
+  } catch (_) {}
+}
+
 function wirePdfDrag(linkEl, row) {
   const absoluteUrl = toAbsoluteUrl(row.pdf_url || "");
   if (!absoluteUrl) return;
   linkEl.draggable = true;
-  linkEl.title = "Drag this PDF link into Gmail";
+  linkEl.title = "Drag to attach PDF";
+
+  linkEl.addEventListener("pointerenter", () => {
+    primePdfBlob(row);
+  });
+  linkEl.addEventListener("mousedown", () => {
+    primePdfBlob(row);
+  });
 
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
+    const cached = state.pdfBlobCache[row.pdf_url || ""];
+    const fileName = row.pdf_file || "ticket.pdf";
+    if (cached && dt.items && dt.items.add) {
+      try {
+        const file = new File([cached], fileName, { type: "application/pdf" });
+        dt.items.add(file);
+      } catch (_) {}
+    }
+    // Fallback payloads for clients that don't accept file drags from browser.
     dt.setData("text/plain", absoluteUrl);
     dt.setData("text/uri-list", absoluteUrl);
-    dt.setData("text/html", `<a href="${absoluteUrl}">${row.pdf_file || "Ticket PDF"}</a>`);
+    dt.setData("text/html", `<a href="${absoluteUrl}">${fileName}</a>`);
   });
 }
 
@@ -127,14 +153,21 @@ function renderPreview() {
 
     const pdfTd = document.createElement("td");
     if (row.pdf_url && row.pdf_file) {
-      const link = document.createElement("a");
-      link.href = row.pdf_url;
-      link.textContent = row.pdf_file;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.className = "pdf-drag-link";
-      wirePdfDrag(link, row);
-      pdfTd.appendChild(link);
+      const openLink = document.createElement("a");
+      openLink.href = row.pdf_url;
+      openLink.textContent = row.pdf_file;
+      openLink.target = "_blank";
+      openLink.rel = "noopener noreferrer";
+      openLink.className = "pdf-open-link";
+
+      const dragChip = document.createElement("span");
+      dragChip.textContent = "Drag PDF";
+      dragChip.className = "pdf-drag-link";
+      wirePdfDrag(dragChip, row);
+
+      pdfTd.appendChild(openLink);
+      pdfTd.appendChild(document.createTextNode(" "));
+      pdfTd.appendChild(dragChip);
     } else {
       pdfTd.textContent = row.pdf_file || "";
     }

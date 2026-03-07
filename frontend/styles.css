@@ -314,10 +314,23 @@ a {
 
 .pdf-drag-link {
   cursor: grab;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #b9cbc6;
+  background: #edf7f5;
+  color: #0f6f77;
+  font-size: 0.8rem;
+  font-weight: 700;
 }
 
 .pdf-drag-link:active {
   cursor: grabbing;
+}
+
+.pdf-open-link {
+  margin-right: 6px;
 }
 
 @keyframes rise {
