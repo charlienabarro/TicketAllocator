@@ -185,6 +185,8 @@ async function downloadAllPreviewPdfs() {
 function wirePdfDrag(linkEl, row) {
   const key = row.pdf_url || "";
   if (!key) return;
+  const absoluteUrl = toAbsoluteUrl(key);
+  if (!absoluteUrl) return;
   linkEl.draggable = true;
   linkEl.title = "Drag to attach PDF";
 
@@ -216,14 +218,7 @@ function wirePdfDrag(linkEl, row) {
       } catch (_) {}
     }
     if (!fileAdded) {
-      const dataUrl = state.pdfDataUrlCache[key] || "";
-      if (!dataUrl) {
-        event.preventDefault();
-        setStatus("Could not prepare local PDF payload for drag. Use PDF name to download.", true);
-        return;
-      }
-      dt.setData("DownloadURL", `application/pdf:${fileName}:${dataUrl}`);
-      dt.setData("text/uri-list", dataUrl);
+      dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
     }
     dt.setData("text/plain", "");
   });
@@ -263,12 +258,6 @@ function renderPreview() {
       const mailLink = document.createElement("a");
       mailLink.href = buildMailtoHref(row);
       mailLink.textContent = row.email;
-      mailLink.addEventListener("click", async (event) => {
-        event.preventDefault();
-        const ok = await downloadPdfToDevice(row);
-        if (!ok) return;
-        window.location.href = buildMailtoHref(row);
-      });
       emailTd.appendChild(mailLink);
     } else {
       emailTd.textContent = "";
@@ -280,20 +269,15 @@ function renderPreview() {
       const loadState = state.pdfStateByUrl[key] || "loading";
       const ready = loadState === "ready";
       const openLink = document.createElement("a");
-      openLink.href = "#";
+      openLink.href = toAbsoluteUrl(key);
       openLink.textContent = row.pdf_file;
       openLink.className = "pdf-open-link";
-      openLink.addEventListener("click", async (event) => {
-        event.preventDefault();
-        await downloadPdfToDevice(row);
-      });
+      openLink.target = "_blank";
+      openLink.rel = "noopener noreferrer";
 
-      const dragChip = document.createElement("a");
+      const dragChip = document.createElement("span");
       dragChip.textContent = "Drag PDF";
       dragChip.className = "pdf-drag-link";
-      dragChip.href = ready ? (state.pdfDataUrlCache[key] || "#") : "#";
-      dragChip.download = row.pdf_file || "ticket.pdf";
-      dragChip.addEventListener("click", (event) => event.preventDefault());
       if (ready) {
         wirePdfDrag(dragChip, row);
       } else {
