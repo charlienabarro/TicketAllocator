@@ -2,6 +2,7 @@ const state = {
   preview: [],
   showName: "",
   pdfBlobCache: {},
+  pdfBlobLoads: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -71,13 +72,25 @@ function buildMailtoHref(row) {
 
 async function primePdfBlob(row) {
   const key = row.pdf_url || "";
-  if (!key || state.pdfBlobCache[key]) return;
-  try {
-    const res = await fetch(toAbsoluteUrl(key));
-    if (!res.ok) return;
-    const blob = await res.blob();
-    state.pdfBlobCache[key] = blob;
-  } catch (_) {}
+  if (!key) return null;
+  if (state.pdfBlobCache[key]) return state.pdfBlobCache[key];
+  if (state.pdfBlobLoads[key]) return state.pdfBlobLoads[key];
+
+  state.pdfBlobLoads[key] = (async () => {
+    try {
+      const res = await fetch(toAbsoluteUrl(key));
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      state.pdfBlobCache[key] = blob;
+      return blob;
+    } catch (_) {
+      return null;
+    } finally {
+      delete state.pdfBlobLoads[key];
+    }
+  })();
+
+  return state.pdfBlobLoads[key];
 }
 
 async function downloadPdfToDevice(row) {
@@ -97,6 +110,13 @@ async function downloadPdfToDevice(row) {
   setTimeout(() => URL.revokeObjectURL(objectUrl), 4000);
 }
 
+async function primeAllPreviewPdfs(rows) {
+  const tasks = rows
+    .filter((row) => row && row.pdf_url)
+    .map((row) => primePdfBlob(row));
+  await Promise.all(tasks);
+}
+
 function wirePdfDrag(linkEl, row) {
   const absoluteUrl = toAbsoluteUrl(row.pdf_url || "");
   if (!absoluteUrl) return;
@@ -114,16 +134,20 @@ function wirePdfDrag(linkEl, row) {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
+    let fileAdded = false;
     const cached = state.pdfBlobCache[row.pdf_url || ""];
     const fileName = row.pdf_file || "ticket.pdf";
     if (cached && dt.items && dt.items.add) {
       try {
         const file = new File([cached], fileName, { type: "application/pdf" });
         dt.items.add(file);
+        fileAdded = true;
       } catch (_) {}
     }
-    // Keep fallback text local-only (no website URL injected into email body).
-    dt.setData("text/plain", fileName);
+    if (!fileAdded) {
+      dt.setData("DownloadURL", `application/pdf:${fileName}:${absoluteUrl}`);
+    }
+    dt.setData("text/plain", "");
   });
 }
 
@@ -262,6 +286,7 @@ $("buildBtn").addEventListener("click", async () => {
     const res = await uploadAndFetch("/ticket-bundles/preview");
     const data = await res.json();
     state.preview = data.rows || [];
+    await primeAllPreviewPdfs(state.preview);
     renderPreview();
     renderStats(data.stats || null);
 
