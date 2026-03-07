@@ -60,6 +60,27 @@ function buildMailtoHref(row) {
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+function getPdfHref(row) {
+  if (row.pdf_data_url) return row.pdf_data_url;
+  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
+  return "";
+}
+
+function wireDragPdf(linkEl, row) {
+  const href = getPdfHref(row);
+  if (!href) return;
+  const fileName = row.pdf_file || "ticket.pdf";
+  linkEl.draggable = true;
+  linkEl.addEventListener("dragstart", (event) => {
+    const dt = event.dataTransfer;
+    if (!dt) return;
+    dt.effectAllowed = "copy";
+    dt.setData("DownloadURL", `application/pdf:${fileName}:${href}`);
+    dt.setData("text/uri-list", href);
+    dt.setData("text/plain", "");
+  });
+}
+
 async function uploadAndFetch(path) {
   const { csvFile, pdfFile } = getFiles();
   const form = new FormData();
@@ -96,27 +117,24 @@ function renderPreview() {
       mailLink.href = buildMailtoHref(row);
       mailLink.textContent = row.email;
       emailTd.appendChild(mailLink);
-    } else {
-      emailTd.textContent = "";
     }
 
     const pdfTd = document.createElement("td");
-    if (row.pdf_url && row.pdf_file) {
-      const absolutePdfUrl = toAbsoluteUrl(row.pdf_url);
-
+    const href = getPdfHref(row);
+    if (href && row.pdf_file) {
       const fileLink = document.createElement("a");
-      fileLink.href = absolutePdfUrl;
+      fileLink.href = href;
       fileLink.textContent = row.pdf_file;
       fileLink.target = "_blank";
       fileLink.rel = "noopener noreferrer";
       fileLink.className = "pdf-open-link";
 
       const dragLink = document.createElement("a");
-      dragLink.href = absolutePdfUrl;
+      dragLink.href = href;
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
-      dragLink.draggable = true;
       dragLink.addEventListener("click", (event) => event.preventDefault());
+      wireDragPdf(dragLink, row);
 
       pdfTd.appendChild(fileLink);
       pdfTd.appendChild(document.createTextNode(" "));
@@ -162,22 +180,17 @@ function renderFailures(failures) {
 
   for (const failure of failures) {
     const tr = document.createElement("tr");
-
     const emailTd = document.createElement("td");
     emailTd.textContent = failure.email || "";
-
     const bookingTd = document.createElement("td");
     bookingTd.textContent = failure.booking_reference || "";
-
     const seatsTd = document.createElement("td");
     seatsTd.textContent = (failure.missing_seats || []).join(", ");
-
     tr.appendChild(emailTd);
     tr.appendChild(bookingTd);
     tr.appendChild(seatsTd);
     tbody.appendChild(tr);
   }
-
   wrap.hidden = false;
 }
 

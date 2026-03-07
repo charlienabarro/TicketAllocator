@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 from collections import defaultdict
 from datetime import datetime
@@ -73,7 +74,8 @@ async def preview_ticket_bundle(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     filenames = build_output_filenames(groups)
-    preview_id = _store_preview_pdfs(pdf_content, groups, filenames)
+    preview_files = _build_preview_files(pdf_content, groups, filenames)
+    preview_id = _store_preview_files(preview_files)
     missing_unique = {seat for group in groups for seat in group.missing_seats}
     matched_unique = {seat for group in groups for seat in group.seat_labels if seat in seat_map}
 
@@ -83,6 +85,7 @@ async def preview_ticket_bundle(
                 "email": group.email,
                 "pdf_file": filename,
                 "pdf_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}",
+                "pdf_data_url": f"data:application/pdf;base64,{base64.b64encode(preview_files[filename]).decode('ascii')}",
             }
             for group, filename in zip(groups, filenames)
         ],
@@ -512,11 +515,15 @@ def _expected_seat_labels(allocation_rows: list[dict[str, str]]) -> set[str]:
     return labels
 
 
-def _store_preview_pdfs(pdf_content: bytes, groups, filenames: list[str]) -> str:
-    preview_id = uuid4().hex
+def _build_preview_files(pdf_content: bytes, groups, filenames: list[str]) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     for group, name in zip(groups, filenames):
         files[name] = build_group_pdf(pdf_content, group)
+    return files
+
+
+def _store_preview_files(files: dict[str, bytes]) -> str:
+    preview_id = uuid4().hex
     preview_download_cache[preview_id] = files
 
     if len(preview_download_cache) > 20:
