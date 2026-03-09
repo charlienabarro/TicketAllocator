@@ -75,10 +75,8 @@ function getPdfOpenHref(row) {
 }
 
 function getPdfDragHref(row) {
-  const dragAssets = buildDragAssets(row);
-  if (dragAssets?.objectUrl) return dragAssets.objectUrl;
-  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   if (row.pdf_data_url) return row.pdf_data_url;
+  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   return "";
 }
 
@@ -111,8 +109,7 @@ function buildDragAssets(row) {
       bytes[i] = binary.charCodeAt(i);
     }
     const file = new File([bytes], fileName, { type: "application/pdf" });
-    const objectUrl = URL.createObjectURL(file);
-    const assets = { file, objectUrl };
+    const assets = { file };
     dragAssetCache.set(cacheKey, assets);
     return assets;
   } catch (_) {
@@ -128,13 +125,15 @@ function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
   if (!href && !dragFile) return;
 
-  linkEl.href = href || "#";
-  linkEl.download = fileName;
   linkEl.draggable = true;
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
+
+    try {
+      dt.clearData();
+    } catch (_) {}
 
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
@@ -213,12 +212,16 @@ function renderPreview() {
       fileLink.rel = "noopener noreferrer";
       fileLink.className = "pdf-open-link";
 
-      const dragLink = document.createElement("a");
-      dragLink.href = dragHref || openHref;
+      const dragLink = document.createElement("button");
+      dragLink.type = "button";
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
       dragLink.addEventListener("click", (event) => event.preventDefault());
-      wireDragPdf(dragLink, row);
+      if (dragHref || openHref) {
+        wireDragPdf(dragLink, row);
+      } else {
+        dragLink.classList.add("is-disabled");
+      }
 
       pdfTd.appendChild(fileLink);
       pdfTd.appendChild(document.createTextNode(" "));
