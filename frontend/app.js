@@ -130,14 +130,18 @@ function wireDragPdf(linkEl, row) {
   if (!href && !dragFile) return;
 
   linkEl.draggable = true;
+  linkEl.setAttribute("draggable", "true");
+  linkEl.style.webkitUserDrag = "element";
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
 
-    try {
-      dt.clearData();
-    } catch (_) {}
+    if (!safari) {
+      try {
+        dt.clearData();
+      } catch (_) {}
+    }
 
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
@@ -215,11 +219,13 @@ function renderPreview() {
       fileLink.rel = "noopener noreferrer";
       fileLink.className = "pdf-open-link";
 
-      const dragLink = document.createElement("button");
-      dragLink.type = "button";
+      const dragLink = document.createElement("a");
+      dragLink.href = dragHref || openHref;
+      dragLink.download = row.pdf_file || "ticket.pdf";
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
-      dragLink.addEventListener("click", (event) => event.preventDefault());
+      dragLink.setAttribute("role", "button");
+      dragLink.title = "Drag into Mail to attach the PDF";
       if (dragHref || openHref) {
         wireDragPdf(dragLink, row);
       } else {
