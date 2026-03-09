@@ -72,18 +72,61 @@ function getPdfDragHref(row) {
   return "";
 }
 
+const dragFileCache = new Map();
+
+function buildDragFileFromDataUrl(row) {
+  const dataUrl = row.pdf_data_url || "";
+  const fileName = row.pdf_file || "ticket.pdf";
+  if (!dataUrl.startsWith("data:application/pdf;base64,")) return null;
+  const cacheKey = `${fileName}|${dataUrl.length}`;
+  if (dragFileCache.has(cacheKey)) return dragFileCache.get(cacheKey);
+
+  try {
+    const base64 = dataUrl.slice("data:application/pdf;base64,".length);
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const file = new File([bytes], fileName, { type: "application/pdf" });
+    dragFileCache.set(cacheKey, file);
+    return file;
+  } catch (_) {
+    return null;
+  }
+}
+
 function wireDragPdf(linkEl, row) {
   const href = getPdfDragHref(row);
-  if (!href) return;
   const fileName = row.pdf_file || "ticket.pdf";
+  const dragFile = buildDragFileFromDataUrl(row);
+  if (!href && !dragFile) return;
+
+  linkEl.href = href || "#";
+  linkEl.download = fileName;
   linkEl.draggable = true;
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
-    dt.setData("DownloadURL", `application/pdf:${fileName}:${href}`);
-    dt.setData("text/uri-list", href);
-    dt.setData("text/plain", "");
+
+    let hasNativeFile = false;
+    if (dragFile && dt.items && typeof dt.items.add === "function") {
+      try {
+        dt.items.add(dragFile);
+        hasNativeFile = true;
+      } catch (_) {}
+    }
+
+    if (href) {
+      dt.setData("DownloadURL", `application/pdf:${fileName}:${href}`);
+      dt.setData("text/uri-list", href);
+      dt.setData("text/html", `<a href="${href}">${fileName}</a>`);
+    }
+
+    if (!hasNativeFile) {
+      dt.setData("text/plain", href || fileName);
+    }
   });
 }
 
