@@ -151,11 +151,19 @@ function wireDragPdf(linkEl, row) {
     if (!dt) return;
     dt.effectAllowed = "copy";
 
-    if (!safari) {
-      try {
-        dt.clearData();
-      } catch (_) {}
+    if (safari) {
+      // Keep Safari drag payload minimal and file-oriented so Mail accepts the drop.
+      if (href) {
+        setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
+        setDragData(dt, "public.file-url", href);
+        setDragData(dt, "public.url-name", fileName);
+      }
+      return;
     }
+
+    try {
+      dt.clearData();
+    } catch (_) {}
 
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
@@ -163,20 +171,6 @@ function wireDragPdf(linkEl, row) {
         const added = dt.items.add(dragFile);
         hasNativeFile = Boolean(added && added.kind === "file");
       } catch (_) {}
-    }
-
-    if (safari) {
-      // Safari Mail should prefer native file drag. Avoid uri-list/text payloads that become links in message body.
-      if (hasNativeFile) {
-        setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
-        setDragData(dt, "public.url-name", fileName);
-        setDragData(dt, "application/x-ticketallocator-pdf", fileName);
-      } else if (href) {
-        // Fallback only when Safari rejects file payload.
-        setDragData(dt, "public.url", href);
-        setDragData(dt, "public.url-name", fileName);
-      }
-      return;
     }
 
     if (href) {
