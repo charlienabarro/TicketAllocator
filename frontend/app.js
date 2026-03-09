@@ -120,7 +120,9 @@ function buildDragAssets(row) {
 
 function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
-  const href = safari && row.pdf_data_url ? row.pdf_data_url : getPdfDragHref(row);
+  const href = safari
+    ? (row.pdf_download_url ? toAbsoluteUrl(row.pdf_download_url) : getPdfDragHref(row))
+    : getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
@@ -147,8 +149,8 @@ function wireDragPdf(linkEl, row) {
     if (href) {
       setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
       if (safari && !hasNativeFile) {
-        // Safari Mail fallback path: avoid text/uri-list to prevent body URL insertion.
-        setDragData(dt, "public.file-url", href);
+        // Safari Mail fallback: only URL file hints, no text fields (prevents body link insertion).
+        setDragData(dt, "public.url", href);
         setDragData(dt, "public.url-name", fileName);
         setDragData(dt, "application/x-ticketallocator-pdf", fileName);
         return;
