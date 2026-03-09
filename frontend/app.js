@@ -43,6 +43,14 @@ function maybePrefillShowName() {
   input.value = detectShowName();
 }
 
+function toAbsoluteUrl(pathOrUrl) {
+  try {
+    return new URL(pathOrUrl, window.location.origin).toString();
+  } catch (_) {
+    return pathOrUrl || "";
+  }
+}
+
 function buildMailtoHref(row) {
   const email = (row.email || "").trim();
   if (!email) return "";
@@ -71,6 +79,12 @@ function getPdfDragHref(row) {
   const dragAssets = buildDragAssets(row);
   if (dragAssets?.localUrl) return dragAssets.localUrl;
   if (row.pdf_data_url) return row.pdf_data_url;
+  return "";
+}
+
+function getPdfDownloadHref(row) {
+  if (row.pdf_download_url) return toAbsoluteUrl(row.pdf_download_url);
+  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   return "";
 }
 
@@ -123,7 +137,7 @@ function clearDragAssetCache() {
 
 function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
-  const href = getPdfDragHref(row);
+  const href = safari ? getPdfDownloadHref(row) : getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
@@ -211,6 +225,8 @@ function renderPreview() {
     const pdfTd = document.createElement("td");
     const openHref = getPdfOpenHref(row);
     const dragHref = getPdfDragHref(row);
+    const downloadHref = getPdfDownloadHref(row);
+    const safari = isSafariBrowser();
     if (openHref && row.pdf_file) {
       const fileLink = document.createElement("a");
       fileLink.href = openHref;
@@ -220,7 +236,7 @@ function renderPreview() {
       fileLink.className = "pdf-open-link";
 
       const dragLink = document.createElement("a");
-      dragLink.href = dragHref || openHref;
+      dragLink.href = safari ? (downloadHref || dragHref || openHref) : (dragHref || openHref);
       dragLink.download = row.pdf_file || "ticket.pdf";
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
