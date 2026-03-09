@@ -43,14 +43,6 @@ function maybePrefillShowName() {
   input.value = detectShowName();
 }
 
-function toAbsoluteUrl(pathOrUrl) {
-  try {
-    return new URL(pathOrUrl, window.location.origin).toString();
-  } catch (_) {
-    return pathOrUrl || "";
-  }
-}
-
 function buildMailtoHref(row) {
   const email = (row.email || "").trim();
   if (!email) return "";
@@ -69,15 +61,16 @@ function buildMailtoHref(row) {
 }
 
 function getPdfOpenHref(row) {
-  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
+  const dragAssets = buildDragAssets(row);
+  if (dragAssets?.localUrl) return dragAssets.localUrl;
   if (row.pdf_data_url) return row.pdf_data_url;
   return "";
 }
 
 function getPdfDragHref(row) {
-  if (row.pdf_download_url) return toAbsoluteUrl(row.pdf_download_url);
+  const dragAssets = buildDragAssets(row);
+  if (dragAssets?.localUrl) return dragAssets.localUrl;
   if (row.pdf_data_url) return row.pdf_data_url;
-  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   return "";
 }
 
@@ -110,7 +103,8 @@ function buildDragAssets(row) {
       bytes[i] = binary.charCodeAt(i);
     }
     const file = new File([bytes], fileName, { type: "application/pdf" });
-    const assets = { file };
+    const localUrl = URL.createObjectURL(file);
+    const assets = { file, localUrl };
     dragAssetCache.set(cacheKey, assets);
     return assets;
   } catch (_) {
@@ -118,11 +112,18 @@ function buildDragAssets(row) {
   }
 }
 
+function clearDragAssetCache() {
+  for (const assets of dragAssetCache.values()) {
+    if (assets?.localUrl) {
+      URL.revokeObjectURL(assets.localUrl);
+    }
+  }
+  dragAssetCache.clear();
+}
+
 function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
-  const href = safari
-    ? (row.pdf_download_url ? toAbsoluteUrl(row.pdf_download_url) : getPdfDragHref(row))
-    : getPdfDragHref(row);
+  const href = getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
@@ -148,14 +149,13 @@ function wireDragPdf(linkEl, row) {
 
     if (href) {
       setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
-      if (safari && !hasNativeFile) {
-        // Safari Mail fallback: only URL file hints, no text fields (prevents body link insertion).
+      if (safari) {
+        // Safari Mail fallback: provide macOS URL hints using local browser object/data URLs.
         setDragData(dt, "public.url", href);
         setDragData(dt, "public.url-name", fileName);
         setDragData(dt, "application/x-ticketallocator-pdf", fileName);
-        return;
       }
-      if (!hasNativeFile) {
+      if (!hasNativeFile && !safari) {
         setDragData(dt, "text/uri-list", href);
       }
     }
@@ -299,6 +299,7 @@ $("buildBtn").addEventListener("click", async () => {
     state.showName = detectShowName();
     const res = await uploadAndFetch("/ticket-bundles/preview");
     const data = await res.json();
+    clearDragAssetCache();
     state.preview = data.rows || [];
     renderPreview();
     renderStats(data.stats || null);
@@ -315,3 +316,4 @@ $("buildBtn").addEventListener("click", async () => {
 
 $("allocationCsvFile").addEventListener("change", maybePrefillShowName);
 $("ticketsPdfFile").addEventListener("change", maybePrefillShowName);
+window.addEventListener("beforeunload", clearDragAssetCache);
