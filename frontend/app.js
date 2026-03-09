@@ -119,11 +119,11 @@ function buildDragAssets(row) {
 }
 
 function wireDragPdf(linkEl, row) {
-  const href = getPdfDragHref(row);
+  const safari = isSafariBrowser();
+  const href = safari && row.pdf_data_url ? row.pdf_data_url : getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
-  const safari = isSafariBrowser();
   if (!href && !dragFile) return;
 
   linkEl.draggable = true;
@@ -139,8 +139,8 @@ function wireDragPdf(linkEl, row) {
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
       try {
-        dt.items.add(dragFile);
-        hasNativeFile = true;
+        const added = dt.items.add(dragFile);
+        hasNativeFile = Boolean(added && added.kind === "file");
       } catch (_) {}
     }
 
