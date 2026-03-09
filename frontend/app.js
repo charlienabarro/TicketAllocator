@@ -134,6 +134,8 @@ function wireDragPdf(linkEl, row) {
     try {
       dt.clearData();
     } catch (_) {}
+    // Safari may cancel cross-app drags unless at least one data flavor exists.
+    setDragData(dt, "application/x-ticketallocator-pdf", fileName);
 
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
@@ -143,18 +145,16 @@ function wireDragPdf(linkEl, row) {
       } catch (_) {}
     }
 
-    if (hasNativeFile) {
-      return;
-    }
-
     if (href) {
       setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
-      if (safari) {
+      if (safari && !hasNativeFile) {
         setDragData(dt, "public.url", href);
         setDragData(dt, "public.url-name", fileName);
         return;
       }
-      setDragData(dt, "text/uri-list", href);
+      if (!hasNativeFile) {
+        setDragData(dt, "text/uri-list", href);
+      }
     }
 
     if (!hasNativeFile) {

@@ -321,6 +321,7 @@ a {
 .pdf-drag-link {
   appearance: none;
   -webkit-appearance: none;
+  -webkit-user-drag: element;
   cursor: grab;
   display: inline-flex;
   align-items: center;
