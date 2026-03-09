@@ -11,7 +11,7 @@ import tempfile
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -85,6 +85,7 @@ async def preview_ticket_bundle(
                 "email": group.email,
                 "pdf_file": filename,
                 "pdf_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}",
+                "pdf_download_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}?download=1",
                 "pdf_data_url": f"data:application/pdf;base64,{base64.b64encode(preview_files[filename]).decode('ascii')}",
             }
             for group, filename in zip(groups, filenames)
@@ -128,14 +129,15 @@ async def generate_ticket_bundle(
 
 
 @app.get("/ticket-bundles/preview/{preview_id}/files/{file_name}")
-def download_preview_file(preview_id: str, file_name: str) -> Response:
+def download_preview_file(preview_id: str, file_name: str, download: bool = Query(default=False)) -> Response:
     preview = preview_download_cache.get(preview_id)
     if not preview:
         raise HTTPException(status_code=404, detail="Preview file set not found. Build preview again.")
     blob = preview.get(file_name)
     if blob is None:
         raise HTTPException(status_code=404, detail="Preview PDF not found.")
-    headers = {"Content-Disposition": f'inline; filename="{file_name}"'}
+    disposition = "attachment" if download else "inline"
+    headers = {"Content-Disposition": f'{disposition}; filename="{file_name}"'}
     return Response(content=blob, media_type="application/pdf", headers=headers)
 
 

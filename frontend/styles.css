@@ -319,8 +319,6 @@ a {
 }
 
 .pdf-drag-link {
-  appearance: none;
-  -webkit-appearance: none;
   -webkit-user-drag: element;
   cursor: grab;
   display: inline-flex;
@@ -332,8 +330,6 @@ a {
   color: #0f6f77;
   font-size: 0.8rem;
   font-weight: 700;
-  font-family: inherit;
-  line-height: 1.2;
   text-decoration: none;
 }
 
