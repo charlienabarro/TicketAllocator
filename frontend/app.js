@@ -55,8 +55,16 @@ function buildMailtoHref(row) {
   const email = (row.email || "").trim();
   if (!email) return "";
   const showName = state.showName || "Show";
-  const subject = `${showName} tickets`;
-  const body = ["Hi,", "", "Please find your tickets attached.", "", "Best regards,"].join("\n");
+  const subject = `Your ${showName} tickets are here!`;
+  const body = [
+    `Hi - here are your tickets for ${showName}. Do let me know if you have any questions, but otherwise please check all the information including the date to make sure everything is correct and please keep them somewhere safe on your phone so that the bar code can be scanned on arrival.`,
+    "",
+    "Please do shout if you have any questions, but otherwise, have a brilliant time!",
+    "",
+    "Thanks",
+    "",
+    "Annabelle",
+  ].join("\n");
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
@@ -67,19 +75,33 @@ function getPdfOpenHref(row) {
 }
 
 function getPdfDragHref(row) {
-  if (row.pdf_data_url) return row.pdf_data_url;
+  const dragAssets = buildDragAssets(row);
+  if (dragAssets?.objectUrl) return dragAssets.objectUrl;
   if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
+  if (row.pdf_data_url) return row.pdf_data_url;
   return "";
 }
 
-const dragFileCache = new Map();
+const dragAssetCache = new Map();
 
-function buildDragFileFromDataUrl(row) {
+function isSafariBrowser() {
+  const ua = navigator.userAgent || "";
+  return /Safari/i.test(ua) && !/Chrome|CriOS|Chromium|Edg|OPR|Android/i.test(ua);
+}
+
+function setDragData(dt, type, value) {
+  if (!value) return;
+  try {
+    dt.setData(type, value);
+  } catch (_) {}
+}
+
+function buildDragAssets(row) {
   const dataUrl = row.pdf_data_url || "";
   const fileName = row.pdf_file || "ticket.pdf";
   if (!dataUrl.startsWith("data:application/pdf;base64,")) return null;
   const cacheKey = `${fileName}|${dataUrl.length}`;
-  if (dragFileCache.has(cacheKey)) return dragFileCache.get(cacheKey);
+  if (dragAssetCache.has(cacheKey)) return dragAssetCache.get(cacheKey);
 
   try {
     const base64 = dataUrl.slice("data:application/pdf;base64,".length);
@@ -89,8 +111,10 @@ function buildDragFileFromDataUrl(row) {
       bytes[i] = binary.charCodeAt(i);
     }
     const file = new File([bytes], fileName, { type: "application/pdf" });
-    dragFileCache.set(cacheKey, file);
-    return file;
+    const objectUrl = URL.createObjectURL(file);
+    const assets = { file, objectUrl };
+    dragAssetCache.set(cacheKey, assets);
+    return assets;
   } catch (_) {
     return null;
   }
@@ -99,7 +123,9 @@ function buildDragFileFromDataUrl(row) {
 function wireDragPdf(linkEl, row) {
   const href = getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
-  const dragFile = buildDragFileFromDataUrl(row);
+  const dragAssets = buildDragAssets(row);
+  const dragFile = dragAssets?.file || null;
+  const safari = isSafariBrowser();
   if (!href && !dragFile) return;
 
   linkEl.href = href || "#";
@@ -119,13 +145,17 @@ function wireDragPdf(linkEl, row) {
     }
 
     if (href) {
-      dt.setData("DownloadURL", `application/pdf:${fileName}:${href}`);
-      dt.setData("text/uri-list", href);
-      dt.setData("text/html", `<a href="${href}">${fileName}</a>`);
+      setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
+      setDragData(dt, "text/uri-list", href);
+      setDragData(dt, "text/html", `<a href="${href}">${fileName}</a>`);
+      if (safari) {
+        setDragData(dt, "public.url", href);
+        setDragData(dt, "public.url-name", fileName);
+      }
     }
 
     if (!hasNativeFile) {
-      dt.setData("text/plain", href || fileName);
+      setDragData(dt, "text/plain", safari ? fileName : (href || fileName));
     }
   });
 }
