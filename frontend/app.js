@@ -146,20 +146,14 @@ function wireDragPdf(linkEl, row) {
   linkEl.draggable = true;
   linkEl.setAttribute("draggable", "true");
   linkEl.style.webkitUserDrag = "element";
+  if (safari) {
+    // On Safari/macOS, preserve native link drag behavior for Mail.
+    return;
+  }
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
-
-    if (safari) {
-      // Keep Safari drag payload minimal and file-oriented so Mail accepts the drop.
-      if (href) {
-        setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
-        setDragData(dt, "public.file-url", href);
-        setDragData(dt, "public.url-name", fileName);
-      }
-      return;
-    }
 
     try {
       dt.clearData();
