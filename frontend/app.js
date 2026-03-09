@@ -144,14 +144,18 @@ function wireDragPdf(linkEl, row) {
       } catch (_) {}
     }
 
+    if (hasNativeFile) {
+      return;
+    }
+
     if (href) {
       setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
-      setDragData(dt, "text/uri-list", href);
-      setDragData(dt, "text/html", `<a href="${href}">${fileName}</a>`);
       if (safari) {
         setDragData(dt, "public.url", href);
         setDragData(dt, "public.url-name", fileName);
+        return;
       }
+      setDragData(dt, "text/uri-list", href);
     }
 
     if (!hasNativeFile) {
