@@ -56,7 +56,12 @@ function buildMailtoHref(row) {
   if (!email) return "";
   const showName = state.showName || "Show";
   const subject = `Your ${showName} tickets are here!`;
-  const body = [
+  const body = buildEmailBodyText(showName);
+  return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function buildEmailBodyText(showName) {
+  return [
     `Hi - here are your tickets for ${showName}. Do let me know if you have any questions, but otherwise please check all the information including the date to make sure everything is correct and please keep them somewhere safe on your phone so that the bar code can be scanned on arrival.`,
     "",
     "Please do shout if you have any questions, but otherwise, have a brilliant time!",
@@ -65,7 +70,69 @@ function buildMailtoHref(row) {
     "",
     "Annabelle",
   ].join("\n");
-  return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+function splitBase64Lines(base64, lineLength = 76) {
+  const parts = [];
+  for (let i = 0; i < base64.length; i += lineLength) {
+    parts.push(base64.slice(i, i + lineLength));
+  }
+  return parts.join("\r\n");
+}
+
+function buildDraftEml(row) {
+  const email = (row.email || "").trim();
+  const fileName = row.pdf_file || "ticket.pdf";
+  const dataUrl = row.pdf_data_url || "";
+  if (!email || !dataUrl.startsWith("data:application/pdf;base64,")) return "";
+
+  const showName = state.showName || "Show";
+  const subject = `Your ${showName} tickets are here!`;
+  const body = buildEmailBodyText(showName);
+  const boundary = `ticketallocator-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const base64 = dataUrl.slice("data:application/pdf;base64,".length);
+  const foldedBase64 = splitBase64Lines(base64);
+
+  return [
+    `To: ${email}`,
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    body,
+    "",
+    `--${boundary}`,
+    `Content-Type: application/pdf; name="${fileName}"`,
+    "Content-Transfer-Encoding: base64",
+    `Content-Disposition: attachment; filename="${fileName}"`,
+    "",
+    foldedBase64,
+    "",
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+}
+
+function downloadDraftEml(row) {
+  const eml = buildDraftEml(row);
+  if (!eml) {
+    setStatus("Could not build draft email for this row.", true);
+    return;
+  }
+  const emlName = `${(row.pdf_file || "ticket").replace(/\.pdf$/i, "")}.eml`;
+  const blob = new Blob([eml], { type: "message/rfc822" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = emlName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function getPdfOpenHref(row) {
@@ -251,6 +318,16 @@ function renderPreview() {
       pdfTd.appendChild(fileLink);
       pdfTd.appendChild(document.createTextNode(" "));
       pdfTd.appendChild(dragLink);
+      if (safari) {
+        const draftLink = document.createElement("button");
+        draftLink.type = "button";
+        draftLink.className = "pdf-drag-link";
+        draftLink.textContent = "Download Draft";
+        draftLink.title = "Downloads a local .eml draft with the PDF attached";
+        draftLink.addEventListener("click", () => downloadDraftEml(row));
+        pdfTd.appendChild(document.createTextNode(" "));
+        pdfTd.appendChild(draftLink);
+      }
     } else {
       pdfTd.textContent = row.pdf_file || "";
     }
