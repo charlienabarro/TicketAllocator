@@ -126,13 +126,15 @@ function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
   if (!href && !dragFile) return;
 
-  linkEl.href = href || "#";
-  linkEl.download = fileName;
   linkEl.draggable = true;
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
+
+    try {
+      dt.clearData();
+    } catch (_) {}
 
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
@@ -145,10 +147,19 @@ function wireDragPdf(linkEl, row) {
     if (href) {
       setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
       if (safari && !hasNativeFile) {
-        setDragData(dt, "public.url", href);
+        // Safari Mail fallback path: avoid text/uri-list to prevent body URL insertion.
+        setDragData(dt, "public.file-url", href);
         setDragData(dt, "public.url-name", fileName);
+        setDragData(dt, "application/x-ticketallocator-pdf", fileName);
+        return;
       }
-      setDragData(dt, "text/uri-list", href);
+      if (!hasNativeFile) {
+        setDragData(dt, "text/uri-list", href);
+      }
+    }
+
+    if (!hasNativeFile && !href) {
+      setDragData(dt, "text/plain", fileName);
     }
   });
 }
@@ -202,10 +213,8 @@ function renderPreview() {
       fileLink.rel = "noopener noreferrer";
       fileLink.className = "pdf-open-link";
 
-      const dragLink = document.createElement("a");
-      dragLink.href = dragHref || openHref || "#";
-      dragLink.target = "_blank";
-      dragLink.rel = "noopener noreferrer";
+      const dragLink = document.createElement("button");
+      dragLink.type = "button";
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
       dragLink.addEventListener("click", (event) => event.preventDefault());
