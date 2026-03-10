@@ -1,6 +1,8 @@
 const state = {
   preview: [],
   showName: "",
+  saveDirHandle: null,
+  saveDirName: "Not selected",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -9,6 +11,26 @@ function setStatus(message, isError = false) {
   const el = $("opsStatus");
   el.textContent = message;
   el.style.color = isError ? "#b91c1c" : "#0f766e";
+}
+
+function updateSaveLocationUi() {
+  const el = $("saveLocationValue");
+  if (!el) return;
+  el.value = state.saveDirName || "Not selected";
+}
+
+function setDownloadButtonVisibility(isVisible) {
+  const btn = $("downloadAllBtn");
+  if (!btn) return;
+  btn.hidden = !isVisible;
+  if (!isVisible) {
+    btn.disabled = false;
+    btn.textContent = "Download All PDFs (.zip)";
+  }
+}
+
+function resetDownloadAvailability() {
+  setDownloadButtonVisibility(false);
 }
 
 function getFiles() {
@@ -305,10 +327,14 @@ function renderFailures(failures) {
 function setBuildLoading(isLoading) {
   const btn = $("buildBtn");
   const downloadBtn = $("downloadAllBtn");
+  const chooseFolderBtn = $("chooseFolderBtn");
   const progress = $("buildProgress");
   btn.disabled = isLoading;
-  if (downloadBtn) {
+  if (downloadBtn && !downloadBtn.hidden) {
     downloadBtn.disabled = isLoading;
+  }
+  if (chooseFolderBtn) {
+    chooseFolderBtn.disabled = isLoading;
   }
   btn.textContent = isLoading ? "Building..." : "Build Email PDF List";
   progress.hidden = !isLoading;
@@ -317,10 +343,14 @@ function setBuildLoading(isLoading) {
 function setDownloadLoading(isLoading) {
   const btn = $("downloadAllBtn");
   const buildBtn = $("buildBtn");
+  const chooseFolderBtn = $("chooseFolderBtn");
   if (!btn) return;
   btn.disabled = isLoading;
   if (buildBtn) {
     buildBtn.disabled = isLoading;
+  }
+  if (chooseFolderBtn) {
+    chooseFolderBtn.disabled = isLoading;
   }
   btn.textContent = isLoading ? "Preparing ZIP..." : "Download All PDFs (.zip)";
 }
@@ -342,6 +372,43 @@ function triggerBlobDownload(blob, fileName) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function supportsDirectoryPicker() {
+  return typeof window.showDirectoryPicker === "function";
+}
+
+async function ensureDirectoryWritePermission(dirHandle) {
+  if (!dirHandle || typeof dirHandle.queryPermission !== "function") return true;
+  const opts = { mode: "readwrite" };
+  let permission = await dirHandle.queryPermission(opts);
+  if (permission === "granted") return true;
+  if (typeof dirHandle.requestPermission !== "function") return false;
+  permission = await dirHandle.requestPermission(opts);
+  return permission === "granted";
+}
+
+function clearSaveDirectorySelection() {
+  state.saveDirHandle = null;
+  state.saveDirName = "Not selected";
+  updateSaveLocationUi();
+}
+
+async function writeBlobToSelectedDirectory(blob, fileName) {
+  if (!state.saveDirHandle) return false;
+  const hasPermission = await ensureDirectoryWritePermission(state.saveDirHandle);
+  if (!hasPermission) {
+    throw new Error("Folder permission was not granted. Please choose the folder again.");
+  }
+
+  const fileHandle = await state.saveDirHandle.getFileHandle(fileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  try {
+    await writable.write(blob);
+  } finally {
+    await writable.close();
+  }
+  return true;
+}
+
 $("buildBtn").addEventListener("click", async () => {
   setBuildLoading(true);
   try {
@@ -354,13 +421,39 @@ $("buildBtn").addEventListener("click", async () => {
     renderPreview();
     renderStats(data.stats || null);
     renderFailures(data.failures || []);
-    setStatus(`Built list: ${state.preview.length} email/PDF rows.`);
+    const hasRows = state.preview.length > 0;
+    setDownloadButtonVisibility(hasRows);
+    setStatus(
+      hasRows
+        ? `Built list: ${state.preview.length} email/PDF rows.`
+        : "Build complete, but no rows were produced.",
+      !hasRows
+    );
   } catch (err) {
+    setDownloadButtonVisibility(false);
     renderStats(null);
     renderFailures([]);
     setStatus(`Build failed: ${err.message}`, true);
   } finally {
     setBuildLoading(false);
+  }
+});
+
+$("chooseFolderBtn").addEventListener("click", async () => {
+  if (!supportsDirectoryPicker()) {
+    setStatus("Folder picker is not available in this browser. Downloads will use the normal save dialog.");
+    return;
+  }
+
+  try {
+    const dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+    state.saveDirHandle = dirHandle;
+    state.saveDirName = dirHandle?.name || "Selected folder";
+    updateSaveLocationUi();
+    setStatus(`Save location selected: ${state.saveDirName}`);
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
+    setStatus(`Could not select folder: ${err.message || "Unknown error"}`, true);
   }
 });
 
@@ -372,15 +465,36 @@ $("downloadAllBtn").addEventListener("click", async () => {
     const blob = await res.blob();
     const showName = detectShowName().replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "Show";
     const fileName = `${showName}_ticket_bundle.zip`;
-    triggerBlobDownload(blob, fileName);
-    setStatus("ZIP downloaded. Choose your save location in the browser download dialog.");
+    if (state.saveDirHandle) {
+      await writeBlobToSelectedDirectory(blob, fileName);
+      setStatus(`ZIP saved to ${state.saveDirName}.`);
+    } else {
+      triggerBlobDownload(blob, fileName);
+      setStatus("ZIP downloaded. Choose your save location in the browser download dialog.");
+    }
   } catch (err) {
-    setStatus(`Download failed: ${err.message}`, true);
+    if (state.saveDirHandle) {
+      clearSaveDirectorySelection();
+      setStatus(
+        `Could not save to selected folder (${err.message}). Folder selection was cleared; please choose it again.`,
+        true
+      );
+    } else {
+      setStatus(`Download failed: ${err.message}`, true);
+    }
   } finally {
     setDownloadLoading(false);
   }
 });
 
-$("allocationCsvFile").addEventListener("change", maybePrefillShowName);
-$("ticketsPdfFile").addEventListener("change", maybePrefillShowName);
+$("allocationCsvFile").addEventListener("change", () => {
+  maybePrefillShowName();
+  resetDownloadAvailability();
+});
+$("ticketsPdfFile").addEventListener("change", () => {
+  maybePrefillShowName();
+  resetDownloadAvailability();
+});
 window.addEventListener("beforeunload", clearDragAssetCache);
+updateSaveLocationUi();
+resetDownloadAvailability();
