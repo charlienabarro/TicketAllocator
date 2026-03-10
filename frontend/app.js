@@ -304,10 +304,42 @@ function renderFailures(failures) {
 
 function setBuildLoading(isLoading) {
   const btn = $("buildBtn");
+  const downloadBtn = $("downloadAllBtn");
   const progress = $("buildProgress");
   btn.disabled = isLoading;
+  if (downloadBtn) {
+    downloadBtn.disabled = isLoading;
+  }
   btn.textContent = isLoading ? "Building..." : "Build Email PDF List";
   progress.hidden = !isLoading;
+}
+
+function setDownloadLoading(isLoading) {
+  const btn = $("downloadAllBtn");
+  const buildBtn = $("buildBtn");
+  if (!btn) return;
+  btn.disabled = isLoading;
+  if (buildBtn) {
+    buildBtn.disabled = isLoading;
+  }
+  btn.textContent = isLoading ? "Preparing ZIP..." : "Download All PDFs (.zip)";
+}
+
+function triggerBlobDownload(blob, fileName) {
+  const nav = window.navigator;
+  if (nav && typeof nav.msSaveOrOpenBlob === "function") {
+    nav.msSaveOrOpenBlob(blob, fileName);
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 $("buildBtn").addEventListener("click", async () => {
@@ -329,6 +361,23 @@ $("buildBtn").addEventListener("click", async () => {
     setStatus(`Build failed: ${err.message}`, true);
   } finally {
     setBuildLoading(false);
+  }
+});
+
+$("downloadAllBtn").addEventListener("click", async () => {
+  setDownloadLoading(true);
+  try {
+    maybePrefillShowName();
+    const res = await uploadAndFetch("/ticket-bundles/generate");
+    const blob = await res.blob();
+    const showName = detectShowName().replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "Show";
+    const fileName = `${showName}_ticket_bundle.zip`;
+    triggerBlobDownload(blob, fileName);
+    setStatus("ZIP downloaded. Choose your save location in the browser download dialog.");
+  } catch (err) {
+    setStatus(`Download failed: ${err.message}`, true);
+  } finally {
+    setDownloadLoading(false);
   }
 });
 
