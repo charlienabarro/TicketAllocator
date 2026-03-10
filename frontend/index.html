@@ -57,7 +57,7 @@
           <button id="chooseFolderBtn" type="button">Choose Folder</button>
           <input id="saveLocationValue" type="text" value="Not selected" readonly />
         </div>
-        <p class="meta">Direct folder save works in Chrome. Safari will use the browser save dialog.</p>
+        <p class="meta">In Chrome, selecting a folder saves a new subfolder full of PDFs there. Safari will use the browser save dialog and ZIP download.</p>
         <div id="buildProgress" class="progress" hidden>
           <div class="progress-bar"></div>
         </div>
@@ -84,7 +84,7 @@
         </div>
 
         <p id="previewStats" class="meta"></p>
-        <p class="meta">Click an email to open draft. Click PDF name to preview in browser. Drag `Drag PDF` to keep the attachment workflow. Use `Download All PDFs (.zip)` to save all generated PDFs together.</p>
+        <p class="meta">Click an email to open draft. Click PDF name to preview in browser. Drag `Drag PDF` to keep the attachment workflow. Use `Download All PDFs (.zip)` to export all generated PDFs.</p>
         <p id="previewFailures" class="meta"></p>
 
         <div id="previewFailureDetails" class="table-wrap" hidden>
@@ -103,6 +103,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260310b"></script>
+  <script src="/static/app.js?v=20260310c"></script>
 </body>
 </html>

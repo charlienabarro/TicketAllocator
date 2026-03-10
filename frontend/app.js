@@ -392,21 +392,51 @@ function clearSaveDirectorySelection() {
   updateSaveLocationUi();
 }
 
-async function writeBlobToSelectedDirectory(blob, fileName) {
-  if (!state.saveDirHandle) return false;
+function toDataUrlPdfBlob(dataUrl) {
+  if (!dataUrl || !dataUrl.startsWith("data:application/pdf;base64,")) return null;
+  const base64 = dataUrl.slice("data:application/pdf;base64,".length);
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: "application/pdf" });
+  } catch (_) {
+    return null;
+  }
+}
+
+function toSafeSlug(text, fallback = "Show") {
+  return (text || fallback).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || fallback;
+}
+
+async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
+  if (!state.saveDirHandle) return 0;
   const hasPermission = await ensureDirectoryWritePermission(state.saveDirHandle);
   if (!hasPermission) {
     throw new Error("Folder permission was not granted. Please choose the folder again.");
   }
 
-  const fileHandle = await state.saveDirHandle.getFileHandle(fileName, { create: true });
-  const writable = await fileHandle.createWritable();
-  try {
-    await writable.write(blob);
-  } finally {
-    await writable.close();
+  const outputDirHandle = await state.saveDirHandle.getDirectoryHandle(folderName, { create: true });
+  let writtenCount = 0;
+
+  for (const row of previewRows) {
+    const fileName = row?.pdf_file || "";
+    const blob = toDataUrlPdfBlob(row?.pdf_data_url || "");
+    if (!fileName || !blob) continue;
+
+    const fileHandle = await outputDirHandle.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    try {
+      await writable.write(blob);
+      writtenCount += 1;
+    } finally {
+      await writable.close();
+    }
   }
-  return true;
+
+  return writtenCount;
 }
 
 $("buildBtn").addEventListener("click", async () => {
@@ -461,14 +491,21 @@ $("downloadAllBtn").addEventListener("click", async () => {
   setDownloadLoading(true);
   try {
     maybePrefillShowName();
-    const res = await uploadAndFetch("/ticket-bundles/generate");
-    const blob = await res.blob();
-    const showName = detectShowName().replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "Show";
-    const fileName = `${showName}_ticket_bundle.zip`;
+    const showName = toSafeSlug(detectShowName(), "Show");
     if (state.saveDirHandle) {
-      await writeBlobToSelectedDirectory(blob, fileName);
-      setStatus(`ZIP saved to ${state.saveDirName}.`);
+      if (!state.preview.length) {
+        throw new Error("Build the email list first.");
+      }
+      const folderName = `${showName}_ticket_bundle`;
+      const writtenCount = await writePreviewPdfsToSelectedDirectory(state.preview, folderName);
+      if (writtenCount === 0) {
+        throw new Error("No PDF files were available to save.");
+      }
+      setStatus(`${writtenCount} PDF(s) saved to ${state.saveDirName}/${folderName}.`);
     } else {
+      const res = await uploadAndFetch("/ticket-bundles/generate");
+      const blob = await res.blob();
+      const fileName = `${showName}_ticket_bundle.zip`;
       triggerBlobDownload(blob, fileName);
       setStatus("ZIP downloaded. Choose your save location in the browser download dialog.");
     }
