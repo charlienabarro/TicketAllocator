@@ -1,8 +1,14 @@
+const DEFAULT_SAVE_LOCATION_HINT =
+  "Annabelle's New Ticket Folder / ***SEATING & E-TICKETS / *TICKETS WAITING TO BE SENT OUT";
+const SAVE_LOCATION_DB_NAME = "ticket-allocator-save-location";
+const SAVE_LOCATION_STORE_NAME = "handles";
+const SAVE_LOCATION_HANDLE_KEY = "default-save-dir";
+
 const state = {
   preview: [],
   showName: "",
   saveDirHandle: null,
-  saveDirName: "Not selected",
+  saveDirName: DEFAULT_SAVE_LOCATION_HINT,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -16,7 +22,7 @@ function setStatus(message, isError = false) {
 function updateSaveLocationUi() {
   const el = $("saveLocationValue");
   if (!el) return;
-  el.value = state.saveDirName || "Not selected";
+  el.value = state.saveDirName || DEFAULT_SAVE_LOCATION_HINT;
 }
 
 function setDownloadButtonVisibility(isVisible) {
@@ -387,6 +393,68 @@ function supportsDirectoryPicker() {
   return typeof window.showDirectoryPicker === "function";
 }
 
+function openSaveLocationDb() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("IndexedDB is not available in this browser."));
+      return;
+    }
+
+    const request = window.indexedDB.open(SAVE_LOCATION_DB_NAME, 1);
+    request.onerror = () => reject(request.error || new Error("Could not open save-location storage."));
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(SAVE_LOCATION_STORE_NAME)) {
+        db.createObjectStore(SAVE_LOCATION_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+async function getPersistedDirectoryHandle() {
+  const db = await openSaveLocationDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SAVE_LOCATION_STORE_NAME, "readonly");
+    const store = tx.objectStore(SAVE_LOCATION_STORE_NAME);
+    const request = store.get(SAVE_LOCATION_HANDLE_KEY);
+    request.onerror = () => reject(request.error || new Error("Could not read saved folder."));
+    request.onsuccess = () => resolve(request.result || null);
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => reject(tx.error || new Error("Could not finish reading saved folder."));
+  });
+}
+
+async function persistDirectoryHandle(dirHandle) {
+  const db = await openSaveLocationDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SAVE_LOCATION_STORE_NAME, "readwrite");
+    const store = tx.objectStore(SAVE_LOCATION_STORE_NAME);
+    const request = store.put(dirHandle, SAVE_LOCATION_HANDLE_KEY);
+    request.onerror = () => reject(request.error || new Error("Could not save folder selection."));
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => reject(tx.error || new Error("Could not finish saving folder selection."));
+  });
+}
+
+async function clearPersistedDirectoryHandle() {
+  const db = await openSaveLocationDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SAVE_LOCATION_STORE_NAME, "readwrite");
+    const store = tx.objectStore(SAVE_LOCATION_STORE_NAME);
+    const request = store.delete(SAVE_LOCATION_HANDLE_KEY);
+    request.onerror = () => reject(request.error || new Error("Could not clear saved folder."));
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => reject(tx.error || new Error("Could not finish clearing saved folder."));
+  });
+}
+
 async function ensureDirectoryWritePermission(dirHandle) {
   if (!dirHandle || typeof dirHandle.queryPermission !== "function") return true;
   const opts = { mode: "readwrite" };
@@ -399,8 +467,47 @@ async function ensureDirectoryWritePermission(dirHandle) {
 
 function clearSaveDirectorySelection() {
   state.saveDirHandle = null;
-  state.saveDirName = "Not selected";
+  state.saveDirName = DEFAULT_SAVE_LOCATION_HINT;
   updateSaveLocationUi();
+}
+
+async function clearSaveDirectorySelectionAndPersistedHandle() {
+  clearSaveDirectorySelection();
+  if (!window.indexedDB) return;
+  try {
+    await clearPersistedDirectoryHandle();
+  } catch (_) {}
+}
+
+async function restoreSavedDirectorySelection() {
+  if (!supportsDirectoryPicker() || !window.indexedDB) {
+    clearSaveDirectorySelection();
+    return;
+  }
+
+  try {
+    const dirHandle = await getPersistedDirectoryHandle();
+    if (!dirHandle) {
+      clearSaveDirectorySelection();
+      return;
+    }
+
+    const hasPermission = await ensureDirectoryWritePermission(dirHandle);
+    if (!hasPermission) {
+      await clearSaveDirectorySelectionAndPersistedHandle();
+      setStatus(
+        "Saved Dropbox folder needs permission again. Please choose *TICKETS WAITING TO BE SENT OUT.",
+        true
+      );
+      return;
+    }
+
+    state.saveDirHandle = dirHandle;
+    state.saveDirName = dirHandle?.name || "*TICKETS WAITING TO BE SENT OUT";
+    updateSaveLocationUi();
+  } catch (_) {
+    await clearSaveDirectorySelectionAndPersistedHandle();
+  }
 }
 
 function toDataUrlPdfBlob(dataUrl) {
@@ -490,6 +597,9 @@ $("chooseFolderBtn").addEventListener("click", async () => {
     const dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
     state.saveDirHandle = dirHandle;
     state.saveDirName = dirHandle?.name || "Selected folder";
+    try {
+      await persistDirectoryHandle(dirHandle);
+    } catch (_) {}
     updateSaveLocationUi();
     setStatus(`Save location selected: ${state.saveDirName}`);
   } catch (err) {
@@ -522,7 +632,7 @@ $("downloadAllBtn").addEventListener("click", async () => {
     }
   } catch (err) {
     if (state.saveDirHandle) {
-      clearSaveDirectorySelection();
+      await clearSaveDirectorySelectionAndPersistedHandle();
       setStatus(
         `Could not save to selected folder (${err.message}). Folder selection was cleared; please choose it again.`,
         true
@@ -552,6 +662,7 @@ $("ticketsPdfFile").addEventListener("change", () => {
 window.addEventListener("beforeunload", clearDragAssetCache);
 updateSaveLocationUi();
 resetDownloadAvailability();
+restoreSavedDirectorySelection();
 
 // ---------------------------------------------------------------------------
 // Drag-and-drop file input zones
