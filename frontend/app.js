@@ -60,7 +60,7 @@ function updatePerformanceDetailsUi() {
   const timeInput = $("performanceTimeInput");
   if (!wrap || !help || !dateInput || !timeInput) return;
 
-  const shouldShow = state.hasBuiltPreview;
+  const shouldShow = state.hasBuiltPreview && state.needsPerformanceDetails;
   if (shouldShow) {
     wrap.removeAttribute("hidden");
     help.removeAttribute("hidden");
@@ -179,6 +179,33 @@ function dedupeStrings(values) {
   return out;
 }
 
+function normalizePerformanceTimeValue(value) {
+  const clean = String(value || "").trim();
+  if (!clean) return "";
+
+  const twelveHour = clean.match(/^(\d{1,2})(?::|\.)(\d{2})\s*([ap])\.?\s*m?\.?$/i);
+  if (twelveHour) {
+    return format12hTime(twelveHour[1], twelveHour[2], twelveHour[3]);
+  }
+
+  const twelveHourCompact = clean.match(/^(\d{1,2})\s*([ap])\.?\s*m?\.?$/i);
+  if (twelveHourCompact) {
+    return format12hTime(twelveHourCompact[1], "00", twelveHourCompact[2]);
+  }
+
+  const twentyFourHour = clean.match(/^([01]?\d|2[0-3])[:.](\d{2})$/);
+  if (twentyFourHour) {
+    return format24hTime(twentyFourHour[1], twentyFourHour[2]);
+  }
+
+  const bare = clean.match(/^(\d{1,2})\.(\d{2})$/);
+  if (bare) {
+    return `${Number(bare[1])}.${bare[2]}`;
+  }
+
+  return clean;
+}
+
 function extractDateCandidates(text) {
   if (!text) return [];
   const values = [];
@@ -233,42 +260,11 @@ function extractPerformanceMetadataFromFileNames() {
   };
 }
 
-function getPerformanceContextText() {
-  return [
-    $("allocationCsvFile").files[0]?.name || "",
-    $("ticketsPdfFile").files[0]?.name || "",
-    state.showName || "",
-  ].join(" \n ");
-}
-
-function applyPerformanceContextHints(timeValue, contextText) {
-  const cleanTime = String(timeValue || "").trim();
-  const context = String(contextText || "");
-  if (!cleanTime) return "";
-
-  const matineeHint = /\bmat(?:inee)?\b/i.test(context);
-  if (!matineeHint) return cleanTime;
-
-  const match = cleanTime.match(/^(\d{1,2})\.(\d{2})(am|pm)$/i);
-  if (!match) return cleanTime;
-
-  const hour = Number(match[1]);
-  const meridiem = match[3].toLowerCase();
-  if (meridiem === "am" && hour >= 1 && hour <= 6) {
-    return `${hour}.${match[2]}pm`;
-  }
-  return cleanTime;
-}
-
 function applyDetectedPerformanceDetails(fileNameMetadata, previewMetadata) {
   const pdfDate = previewMetadata?.performance_date || "";
   const pdfTime = previewMetadata?.performance_time || "";
-  const contextText = getPerformanceContextText();
   state.detectedPerformanceDate = fileNameMetadata.performanceDate || pdfDate;
-  state.detectedPerformanceTime = applyPerformanceContextHints(
-    fileNameMetadata.performanceTime || pdfTime,
-    contextText
-  );
+  state.detectedPerformanceTime = normalizePerformanceTimeValue(fileNameMetadata.performanceTime || pdfTime);
   state.manualPerformanceDate = state.detectedPerformanceDate;
   state.manualPerformanceTime = state.detectedPerformanceTime;
   state.needsPerformanceDetails = !(state.detectedPerformanceDate && state.detectedPerformanceTime);
@@ -1068,7 +1064,7 @@ $("performanceDateInput").addEventListener("input", (event) => {
   state.manualPerformanceDate = event.target.value;
 });
 $("performanceTimeInput").addEventListener("input", (event) => {
-  state.manualPerformanceTime = event.target.value;
+  state.manualPerformanceTime = normalizePerformanceTimeValue(event.target.value);
 });
 window.addEventListener("beforeunload", clearDragAssetCache);
 updateSaveLocationUi();

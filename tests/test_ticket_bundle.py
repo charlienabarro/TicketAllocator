@@ -79,7 +79,7 @@ class TicketBundleTests(unittest.TestCase):
 
     def test_extract_performance_time_candidates_formats_24_hour_time(self) -> None:
         parsed = _extract_performance_time_candidates("Paddington Sat 15 March 2026 19:30")
-        self.assertEqual(parsed, ["7.30pm"])
+        self.assertEqual(parsed, ["7.30"])
 
     def test_extract_ticket_performance_metadata_from_pdf_text(self) -> None:
         class FakePage:
@@ -95,7 +95,7 @@ class TicketBundleTests(unittest.TestCase):
 
         self.assertEqual(
             parsed,
-            {"performance_date": "Mar 15", "performance_time": "7.30pm", "confidence": True},
+            {"performance_date": "Mar 15", "performance_time": "7.30", "confidence": True},
         )
 
     def test_extract_ticket_performance_metadata_marks_ambiguous_time_low_confidence(self) -> None:

@@ -465,7 +465,7 @@ def _format_12h_time(hour_value: str, minute_value: str, meridiem_value: str) ->
     meridiem = (meridiem_value or "").strip().lower()
     if meridiem not in {"a", "p"}:
         return None
-    return f"{hour}.{minute:02d}{meridiem}m"
+    return f"{hour}.{minute:02d}"
 
 
 def _format_24h_time(hour_value: str, minute_value: str) -> str | None:
@@ -477,9 +477,8 @@ def _format_24h_time(hour_value: str, minute_value: str) -> str | None:
     if hour < 0 or hour > 23 or minute < 0 or minute > 59:
         return None
 
-    meridiem = "am" if hour < 12 else "pm"
     display_hour = hour % 12 or 12
-    return f"{display_hour}.{minute:02d}{meridiem}"
+    return f"{display_hour}.{minute:02d}"
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:
