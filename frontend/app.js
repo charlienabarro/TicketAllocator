@@ -84,7 +84,7 @@ function setDownloadButtonVisibility(isVisible) {
   btn.hidden = !isVisible;
   if (!isVisible) {
     btn.disabled = false;
-    btn.textContent = "Download All PDFs (.zip)";
+    btn.textContent = "Download All PDFs";
   }
 }
 
@@ -590,7 +590,7 @@ function setDownloadLoading(isLoading) {
   if (chooseFolderBtn) {
     chooseFolderBtn.disabled = isLoading;
   }
-  btn.textContent = isLoading ? "Preparing ZIP..." : "Download All PDFs (.zip)";
+  btn.textContent = isLoading ? "Preparing..." : "Download All PDFs";
 }
 
 function triggerBlobDownload(blob, fileName) {
