@@ -760,8 +760,8 @@ function buildEmailFileContent(row) {
   const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   const mailtoXml = mailto.replace(/&/g, "&amp;");
 
-  // .webloc is a macOS plist URL shortcut. Double-clicking opens the mailto:
-  // link in Apple Mail as a fully editable compose window.
+  // .inetloc is the generic macOS internet-location format and handles mailto:
+  // links more reliably than .webloc.
   const plist = [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
@@ -777,8 +777,8 @@ function buildEmailFileContent(row) {
 }
 
 function emailFileName(pdfFileName) {
-  if (!pdfFileName) return "email.webloc";
-  return pdfFileName.replace(/\.pdf$/i, "_email.webloc");
+  if (!pdfFileName) return "email.inetloc";
+  return pdfFileName.replace(/\.pdf$/i, "_email.inetloc");
 }
 
 async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
