@@ -324,16 +324,13 @@ function buildMailtoHref(row) {
 }
 
 function getPdfOpenHref(row) {
-  // Prefer the server-served preview URL — blob: URLs break in new tabs
-  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
+  const dragAssets = buildDragAssets(row);
+  if (dragAssets?.localUrl) return dragAssets.localUrl;
   if (row.pdf_data_url) return row.pdf_data_url;
   return "";
 }
 
 function getPdfDragHref(row) {
-  // Prefer server download URL — blob: URLs give 0KB in email clients
-  if (row.pdf_download_url) return toAbsoluteUrl(row.pdf_download_url);
-  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   const dragAssets = buildDragAssets(row);
   if (dragAssets?.localUrl) return dragAssets.localUrl;
   if (row.pdf_data_url) return row.pdf_data_url;
@@ -393,44 +390,25 @@ function clearDragAssetCache() {
   dragAssetCache.clear();
 }
 
-function isMacOS() {
-  return /Mac/i.test(navigator.platform || navigator.userAgent || "");
-}
-
 function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
-  const mac = isMacOS();
+  const href = safari ? getPdfDownloadHref(row) : getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
-  const blobUrl = dragAssets?.localUrl || "";
-  const downloadHref = getPdfDownloadHref(row);
-
-  if (!dragFile && !downloadHref && !blobUrl) return;
+  if (!href && !dragFile) return;
 
   linkEl.draggable = true;
   linkEl.setAttribute("draggable", "true");
   linkEl.style.webkitUserDrag = "element";
-
-  // On macOS (Safari or Chrome), Apple Mail only accepts files via native
-  // link drag. Set href to the blob URL + download attribute and let the
-  // browser handle the drag natively — do NOT add a custom dragstart handler.
-  if (mac) {
-    if (blobUrl) {
-      linkEl.href = blobUrl;
-      linkEl.download = fileName;
-    } else if (downloadHref) {
-      linkEl.href = downloadHref;
-      linkEl.download = fileName;
-    }
+  if (safari) {
+    // On Safari/macOS, preserve native link drag behavior for Mail.
     return;
   }
-
-  // Non-macOS: use custom dragstart for Windows/Linux drop targets
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
-    dt.effectAllowed = "copyMove";
+    dt.effectAllowed = "copy";
 
     try {
       dt.clearData();
@@ -444,13 +422,15 @@ function wireDragPdf(linkEl, row) {
       } catch (_) {}
     }
 
-    if (downloadHref && downloadHref.startsWith("http")) {
-      setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${downloadHref}`);
+    if (href) {
+      setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
+      if (!hasNativeFile) {
+        setDragData(dt, "text/uri-list", href);
+      }
     }
 
-    if (!hasNativeFile && downloadHref) {
-      setDragData(dt, "text/uri-list", downloadHref);
-      setDragData(dt, "text/plain", downloadHref);
+    if (!hasNativeFile && !href) {
+      setDragData(dt, "text/plain", fileName);
     }
   });
 }
@@ -500,22 +480,26 @@ function renderPreview() {
     const openHref = getPdfOpenHref(row);
     const dragHref = getPdfDragHref(row);
     const downloadHref = getPdfDownloadHref(row);
-    if (openHref && row.pdf_file) {
+    // For the clickable filename, prefer the server URL (works in new tabs).
+    // Blob URLs break when opened in a separate tab.
+    const previewHref = (row.pdf_url ? toAbsoluteUrl(row.pdf_url) : "") || openHref;
+    if (previewHref && row.pdf_file) {
       const fileLink = document.createElement("a");
-      fileLink.href = openHref;
+      fileLink.href = previewHref;
       fileLink.textContent = row.pdf_file;
       fileLink.target = "_blank";
       fileLink.rel = "noopener noreferrer";
       fileLink.className = "pdf-open-link";
 
       const dragLink = document.createElement("a");
-      dragLink.href = downloadHref || dragHref || openHref;
+      const safari = isSafariBrowser();
+      dragLink.href = safari ? (downloadHref || dragHref || openHref) : (dragHref || openHref);
       dragLink.download = row.pdf_file || "ticket.pdf";
-      dragLink.textContent = "Drag";
+      dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
       dragLink.setAttribute("role", "button");
-      dragLink.title = "Drag into Mail or a folder to attach";
-      if (downloadHref || dragHref || openHref) {
+      dragLink.title = "Drag into Mail to attach the PDF";
+      if (dragHref || openHref) {
         wireDragPdf(dragLink, row);
       } else {
         dragLink.classList.add("is-disabled");
