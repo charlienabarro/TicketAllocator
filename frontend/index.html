@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ticket Bundle Splitter</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260310b" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260315a" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
@@ -34,14 +34,26 @@
           <span class="chip">CSV or Numbers</span>
         </div>
 
-        <label class="field stack">Allocation File
+        <label class="field stack">Allocation File</label>
+        <div id="dropZoneAllocation" class="drop-zone">
           <input id="allocationCsvFile" type="file" accept=".csv,.numbers,text/csv,application/vnd.apple.numbers" />
-        </label>
+          <div class="drop-zone-prompt">
+            <span class="drop-zone-icon">&#128196;</span>
+            <span>Drag &amp; drop your <strong>.csv</strong> or <strong>.numbers</strong> file here, or click to browse</span>
+            <span class="drop-file-name"></span>
+          </div>
+        </div>
         <p class="meta">Supports `.csv` and `.numbers`; headers optional. Email and seat columns are auto-detected.</p>
 
-        <label class="field stack">Master Tickets PDF
+        <label class="field stack">Master Tickets PDF</label>
+        <div id="dropZonePdf" class="drop-zone">
           <input id="ticketsPdfFile" type="file" accept="application/pdf" />
-        </label>
+          <div class="drop-zone-prompt">
+            <span class="drop-zone-icon">&#128206;</span>
+            <span>Drag &amp; drop your <strong>.pdf</strong> ticket file here, or click to browse</span>
+            <span class="drop-file-name"></span>
+          </div>
+        </div>
         <p class="meta">Use one ticket per page with seat text embedded in the PDF.</p>
 
         <label class="field stack">Show Name (Email Subject)
@@ -103,6 +115,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260310c"></script>
+  <script src="/static/app.js?v=20260315a"></script>
 </body>
 </html>

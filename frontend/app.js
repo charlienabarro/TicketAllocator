@@ -159,28 +159,38 @@ function clearDragAssetCache() {
 
 function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
-  const href = safari ? getPdfDownloadHref(row) : getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
-  if (!href && !dragFile) return;
+  const downloadHref = getPdfDownloadHref(row);
+
+  if (!dragFile && !downloadHref) return;
 
   linkEl.draggable = true;
   linkEl.setAttribute("draggable", "true");
   linkEl.style.webkitUserDrag = "element";
+
   if (safari) {
-    // On Safari/macOS, preserve native link drag behavior for Mail.
+    // Safari: use download link so native drag attaches via the link href.
+    if (downloadHref) {
+      linkEl.href = downloadHref;
+      linkEl.download = fileName;
+    }
     return;
   }
+
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
-    dt.effectAllowed = "copy";
+    dt.effectAllowed = "copyMove";
 
     try {
       dt.clearData();
     } catch (_) {}
 
+    // Strategy 1: Add as a real File object via DataTransferItemList.
+    // This is the most reliable way to get an actual PDF attachment
+    // into email clients and file managers.
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
       try {
@@ -189,15 +199,16 @@ function wireDragPdf(linkEl, row) {
       } catch (_) {}
     }
 
-    if (href) {
-      setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
-      if (!hasNativeFile) {
-        setDragData(dt, "text/uri-list", href);
-      }
+    // Strategy 2: DownloadURL triggers a Chrome download-on-drop.
+    // Must use an absolute https:// URL (blob: won't work cross-origin).
+    if (downloadHref && downloadHref.startsWith("http")) {
+      setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${downloadHref}`);
     }
 
-    if (!hasNativeFile && !href) {
-      setDragData(dt, "text/plain", fileName);
+    // Strategy 3: Fallback text/uri-list for apps that accept links.
+    if (!hasNativeFile && downloadHref) {
+      setDragData(dt, "text/uri-list", downloadHref);
+      setDragData(dt, "text/plain", downloadHref);
     }
   });
 }
@@ -254,13 +265,13 @@ function renderPreview() {
       fileLink.className = "pdf-open-link";
 
       const dragLink = document.createElement("a");
-      dragLink.href = safari ? (downloadHref || dragHref || openHref) : (dragHref || openHref);
+      dragLink.href = downloadHref || dragHref || openHref;
       dragLink.download = row.pdf_file || "ticket.pdf";
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
       dragLink.setAttribute("role", "button");
-      dragLink.title = "Drag into Mail to attach the PDF";
-      if (dragHref || openHref) {
+      dragLink.title = "Drag into Mail or a folder to attach the PDF";
+      if (downloadHref || dragHref || openHref) {
         wireDragPdf(dragLink, row);
       } else {
         dragLink.classList.add("is-disabled");
@@ -527,11 +538,88 @@ $("downloadAllBtn").addEventListener("click", async () => {
 $("allocationCsvFile").addEventListener("change", () => {
   maybePrefillShowName();
   resetDownloadAvailability();
+  const file = $("allocationCsvFile").files[0];
+  const nameEl = document.querySelector("#dropZoneAllocation .drop-file-name");
+  if (nameEl) nameEl.textContent = file ? file.name : "";
 });
 $("ticketsPdfFile").addEventListener("change", () => {
   maybePrefillShowName();
   resetDownloadAvailability();
+  const file = $("ticketsPdfFile").files[0];
+  const nameEl = document.querySelector("#dropZonePdf .drop-file-name");
+  if (nameEl) nameEl.textContent = file ? file.name : "";
 });
 window.addEventListener("beforeunload", clearDragAssetCache);
 updateSaveLocationUi();
 resetDownloadAvailability();
+
+// ---------------------------------------------------------------------------
+// Drag-and-drop file input zones
+// ---------------------------------------------------------------------------
+
+function setFileInputFiles(inputEl, file) {
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  inputEl.files = dt.files;
+  inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function setupDropZone(dropZoneId, inputId, acceptTest) {
+  const zone = $(dropZoneId);
+  const input = $(inputId);
+  if (!zone || !input) return;
+
+  let dragCounter = 0;
+
+  zone.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    dragCounter++;
+    zone.classList.add("drop-active");
+  });
+
+  zone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+
+  zone.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      zone.classList.remove("drop-active");
+    }
+  });
+
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    zone.classList.remove("drop-active");
+
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+    if (acceptTest && !acceptTest(file)) {
+      setStatus(`"${file.name}" is not an accepted file type for this input.`, true);
+      return;
+    }
+
+    setFileInputFiles(input, file);
+    const nameEl = zone.querySelector(".drop-file-name");
+    if (nameEl) nameEl.textContent = file.name;
+  });
+}
+
+function isAllocationFile(file) {
+  const name = (file.name || "").toLowerCase();
+  return name.endsWith(".csv") || name.endsWith(".numbers");
+}
+
+function isPdfFile(file) {
+  const name = (file.name || "").toLowerCase();
+  return name.endsWith(".pdf") || file.type === "application/pdf";
+}
+
+setupDropZone("dropZoneAllocation", "allocationCsvFile", isAllocationFile);
+setupDropZone("dropZonePdf", "ticketsPdfFile", isPdfFile);
