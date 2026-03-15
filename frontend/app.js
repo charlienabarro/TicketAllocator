@@ -758,6 +758,7 @@ function buildEmailFileContent(row) {
   ].join("\n");
 
   const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  const mailtoXml = mailto.replace(/&/g, "&amp;");
 
   // .webloc is a macOS plist URL shortcut. Double-clicking opens the mailto:
   // link in Apple Mail as a fully editable compose window.
@@ -767,7 +768,7 @@ function buildEmailFileContent(row) {
     `<plist version="1.0">`,
     `<dict>`,
     `\t<key>URL</key>`,
-    `\t<string>${mailto}</string>`,
+    `\t<string>${mailtoXml}</string>`,
     `</dict>`,
     `</plist>`,
   ].join("\n");
