@@ -60,7 +60,7 @@ function updatePerformanceDetailsUi() {
   const timeInput = $("performanceTimeInput");
   if (!wrap || !help || !dateInput || !timeInput) return;
 
-  const shouldShow = state.hasBuiltPreview && state.needsPerformanceDetails;
+  const shouldShow = state.hasBuiltPreview;
   if (shouldShow) {
     wrap.removeAttribute("hidden");
     help.removeAttribute("hidden");
@@ -296,8 +296,8 @@ function sanitizeFolderName(value) {
 function buildBundleFolderName() {
   const showName = detectShowName().trim() || "Show";
   const details = getResolvedPerformanceDetails();
-  if (!details.isComplete) {
-    throw new Error("Please add the performance date and time before saving.");
+  if (!details.performanceDate || !details.performanceTime) {
+    throw new Error("Please fill in the performance date and time before saving.");
   }
   return sanitizeFolderName(`${showName} - ${details.performanceDate} - ${details.performanceTime}`);
 }
