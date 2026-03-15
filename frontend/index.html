@@ -4,84 +4,78 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ticket Bundle Splitter</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260315c" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260315d" />
 </head>
 <body>
-  <div class="bg-grid" aria-hidden="true"></div>
-  <div class="bg-glow glow-a" aria-hidden="true"></div>
-  <div class="bg-glow glow-b" aria-hidden="true"></div>
 
   <div class="page">
-    <div class="brand-lockup">
-      <div class="brand-mark">A</div>
-      <div class="brand-text">
-        <p class="brand-name">Theatre from Annabelle</p>
-        <p class="brand-sub">Powered by Charlie</p>
+    <nav class="topbar">
+      <div class="logo">
+        <div class="logo-icon">A</div>
+        <div>
+          <p class="logo-title">Theatre from Annabelle</p>
+          <p class="logo-sub">Powered by Charlie</p>
+        </div>
       </div>
-    </div>
+    </nav>
 
     <header class="hero">
-      <p class="eyebrow">Smart Ticket Ops</p>
       <h1>Ticket Bundle Splitter</h1>
-      <p class="powered">Powered by Charlie</p>
-      <p class="lede">Upload your allocation sheet and master ticket PDF to generate clean, per-customer ticket bundles.</p>
+      <p class="hero-desc">Upload your allocation spreadsheet and ticket PDF. We'll split them into individual files ready to email.</p>
     </header>
 
     <main class="layout">
-      <section class="panel input-panel">
-        <div class="panel-head">
-          <h2>Inputs</h2>
-          <span class="chip">CSV or Numbers</span>
-        </div>
+      <section class="card input-card">
+        <h2>1. Upload files</h2>
 
-        <label class="field stack">Allocation File</label>
+        <label class="label">Allocation spreadsheet</label>
         <div id="dropZoneAllocation" class="drop-zone">
           <input id="allocationCsvFile" type="file" accept=".csv,.numbers,text/csv,application/vnd.apple.numbers" />
-          <div class="drop-zone-prompt">
-            <span class="drop-zone-icon">&#128196;</span>
-            <span>Drag &amp; drop your <strong>.csv</strong> or <strong>.numbers</strong> file here, or click to browse</span>
+          <div class="drop-zone-inner">
+            <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            <span>Drop <strong>.csv</strong> or <strong>.numbers</strong> here, or click to browse</span>
             <span class="drop-file-name"></span>
           </div>
         </div>
-        <p class="meta">Supports `.csv` and `.numbers`; headers optional. Email and seat columns are auto-detected.</p>
 
-        <label class="field stack">Master Tickets PDF</label>
+        <label class="label">Ticket PDF</label>
         <div id="dropZonePdf" class="drop-zone">
           <input id="ticketsPdfFile" type="file" accept="application/pdf" />
-          <div class="drop-zone-prompt">
-            <span class="drop-zone-icon">&#128206;</span>
-            <span>Drag &amp; drop your <strong>.pdf</strong> ticket file here, or click to browse</span>
+          <div class="drop-zone-inner">
+            <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>Drop <strong>.pdf</strong> here, or click to browse</span>
             <span class="drop-file-name"></span>
           </div>
         </div>
-        <p class="meta">Use one ticket per page with seat text embedded in the PDF.</p>
 
-        <label class="field stack">Show Name (Email Subject)
+        <label class="label">Show name
           <input id="showNameInput" type="text" placeholder="Auto-detected from file name" />
         </label>
-        <p class="meta">Subject format: `Your Show Name tickets are here!`.</p>
+        <p class="hint">Used in the email subject line.</p>
 
-        <div id="performanceDetailsFields" class="actions" hidden>
-          <label class="field">
-            Performance Date
-            <input id="performanceDateInput" type="text" placeholder="Mar 15" />
+        <div id="performanceDetailsFields" class="perf-fields" hidden>
+          <label class="label">Performance date
+            <input id="performanceDateInput" type="text" placeholder="e.g. Mar 15" />
           </label>
-          <label class="field">
-            Performance Time
-            <input id="performanceTimeInput" type="text" placeholder="7.30pm" />
+          <label class="label">Performance time
+            <input id="performanceTimeInput" type="text" placeholder="e.g. 7.30pm" />
           </label>
         </div>
-        <p id="performanceDetailsHelp" class="meta" hidden>Add the performance date and time only if we cannot detect them automatically from the file names or ticket PDF.</p>
+        <p id="performanceDetailsHelp" class="hint" hidden>We couldn't detect these from your files — please fill them in.</p>
 
-        <div class="actions">
-          <button id="buildBtn" class="accent">Build Email PDF List</button>
-          <button id="downloadAllBtn" type="button" hidden>Download All PDFs (.zip)</button>
+        <div class="btn-row">
+          <button id="buildBtn" class="btn btn-primary">Build Email List</button>
+          <button id="downloadAllBtn" class="btn btn-secondary" type="button" hidden>Download All PDFs</button>
         </div>
-        <div class="actions">
-          <button id="chooseFolderBtn" type="button">Choose Folder</button>
-          <input id="saveLocationValue" type="text" value="Annabelle's New Ticket Folder / ***SEATING & E-TICKETS / *TICKETS WAITING TO BE SENT OUT" readonly />
+
+        <div class="btn-row">
+          <button id="chooseFolderBtn" class="btn btn-ghost" type="button">Choose save folder</button>
+          <input id="saveLocationValue" type="text" class="folder-display" value="Not selected" readonly />
         </div>
-        <p class="meta">Choose `Annabelle's New Ticket Folder / ***SEATING & E-TICKETS / *TICKETS WAITING TO BE SENT OUT` once in Chrome and we will remember it. Safari will use the browser save dialog and ZIP download.</p>
+
         <div id="buildProgress" class="progress" hidden>
           <div class="progress-bar"></div>
         </div>
@@ -89,27 +83,24 @@
         <div id="opsStatus" class="status"></div>
       </section>
 
-      <section class="panel preview-panel">
-        <div class="panel-head">
-          <h2>Preview</h2>
-          <span class="chip chip-soft">Live Output</span>
-        </div>
+      <section class="card output-card">
+        <h2>2. Preview &amp; send</h2>
+        <p class="hint output-hint" id="emptyStateHint">Your split PDFs will appear here after building.</p>
 
         <div class="table-wrap">
           <table id="previewTable">
             <thead>
               <tr>
-                <th>Email (Compose)</th>
-                <th>PDF File</th>
+                <th>Email</th>
+                <th>PDF</th>
               </tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
 
-        <p id="previewStats" class="meta"></p>
-        <p class="meta">Click an email to open draft. Click PDF name to preview in browser. Drag `Drag PDF` to keep the attachment workflow. Use `Download All PDFs (.zip)` to export all generated PDFs.</p>
-        <p id="previewFailures" class="meta"></p>
+        <p id="previewStats" class="stats-line"></p>
+        <p id="previewFailures" class="stats-line stats-warn"></p>
 
         <div id="previewFailureDetails" class="table-wrap" hidden>
           <table id="previewFailureTable">
@@ -127,6 +118,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260315c"></script>
+  <script src="/static/app.js?v=20260315d"></script>
 </body>
 </html>

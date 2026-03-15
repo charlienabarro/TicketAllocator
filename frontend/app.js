@@ -50,7 +50,7 @@ const $ = (id) => document.getElementById(id);
 function setStatus(message, isError = false) {
   const el = $("opsStatus");
   el.textContent = message;
-  el.style.color = isError ? "#b91c1c" : "#0f766e";
+  el.style.color = isError ? "#dc2626" : "#0f766e";
 }
 
 function updatePerformanceDetailsUi() {
@@ -79,7 +79,7 @@ function setDownloadButtonVisibility(isVisible) {
   btn.hidden = !isVisible;
   if (!isVisible) {
     btn.disabled = false;
-    btn.textContent = "Download All PDFs (.zip)";
+    btn.textContent = "Download All PDFs";
   }
 }
 
@@ -101,7 +101,7 @@ function getFiles() {
   const csvFile = $("allocationCsvFile").files[0];
   const pdfFile = $("ticketsPdfFile").files[0];
   if (!csvFile || !pdfFile) {
-    throw new Error("Please select both allocation CSV and tickets PDF.");
+    throw new Error("Please select both an allocation file and a ticket PDF.");
   }
   return { csvFile, pdfFile };
 }
@@ -399,7 +399,6 @@ function wireDragPdf(linkEl, row) {
   linkEl.style.webkitUserDrag = "element";
 
   if (safari) {
-    // Safari: use download link so native drag attaches via the link href.
     if (downloadHref) {
       linkEl.href = downloadHref;
       linkEl.download = fileName;
@@ -416,9 +415,6 @@ function wireDragPdf(linkEl, row) {
       dt.clearData();
     } catch (_) {}
 
-    // Strategy 1: Add as a real File object via DataTransferItemList.
-    // This is the most reliable way to get an actual PDF attachment
-    // into email clients and file managers.
     let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
       try {
@@ -427,13 +423,10 @@ function wireDragPdf(linkEl, row) {
       } catch (_) {}
     }
 
-    // Strategy 2: DownloadURL triggers a Chrome download-on-drop.
-    // Must use an absolute https:// URL (blob: won't work cross-origin).
     if (downloadHref && downloadHref.startsWith("http")) {
       setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${downloadHref}`);
     }
 
-    // Strategy 3: Fallback text/uri-list for apps that accept links.
     if (!hasNativeFile && downloadHref) {
       setDragData(dt, "text/uri-list", downloadHref);
       setDragData(dt, "text/plain", downloadHref);
@@ -468,6 +461,9 @@ function renderPreview() {
   const tbody = $("previewTable").querySelector("tbody");
   tbody.innerHTML = "";
 
+  const emptyHint = $("emptyStateHint");
+  if (emptyHint) emptyHint.hidden = state.preview.length > 0;
+
   for (const row of state.preview) {
     const tr = document.createElement("tr");
 
@@ -483,7 +479,6 @@ function renderPreview() {
     const openHref = getPdfOpenHref(row);
     const dragHref = getPdfDragHref(row);
     const downloadHref = getPdfDownloadHref(row);
-    const safari = isSafariBrowser();
     if (openHref && row.pdf_file) {
       const fileLink = document.createElement("a");
       fileLink.href = openHref;
@@ -495,10 +490,10 @@ function renderPreview() {
       const dragLink = document.createElement("a");
       dragLink.href = downloadHref || dragHref || openHref;
       dragLink.download = row.pdf_file || "ticket.pdf";
-      dragLink.textContent = "Drag PDF";
+      dragLink.textContent = "Drag";
       dragLink.className = "pdf-drag-link";
       dragLink.setAttribute("role", "button");
-      dragLink.title = "Drag into Mail or a folder to attach the PDF";
+      dragLink.title = "Drag into Mail or a folder to attach";
       if (downloadHref || dragHref || openHref) {
         wireDragPdf(dragLink, row);
       } else {
@@ -529,7 +524,7 @@ function renderStats(stats) {
   const missing = Number(stats.missing_seat_count || 0);
   const outputs = Number(stats.output_pdf_count || 0);
   const status = missing === 0 && requested === matched ? "All matched" : "Check missing seats";
-  el.textContent = `Seats requested: ${requested} | Tickets found in PDF: ${matched} | Missing: ${missing} | Output PDFs: ${outputs} (${status})`;
+  el.textContent = `${requested} seats requested · ${matched} matched · ${missing} missing · ${outputs} PDFs (${status})`;
 }
 
 function renderFailures(failures) {
@@ -538,7 +533,7 @@ function renderFailures(failures) {
   const tbody = $("previewFailureTable").querySelector("tbody");
 
   summary.textContent = failures.length
-    ? `${failures.length} booking(s) have missing seats in the PDF and may produce incomplete bundles.`
+    ? `${failures.length} booking(s) have missing seats and may produce incomplete bundles.`
     : "";
 
   tbody.innerHTML = "";
@@ -575,7 +570,7 @@ function setBuildLoading(isLoading) {
   if (chooseFolderBtn) {
     chooseFolderBtn.disabled = isLoading;
   }
-  btn.textContent = isLoading ? "Building..." : "Build Email PDF List";
+  btn.textContent = isLoading ? "Building…" : "Build Email List";
   progress.hidden = !isLoading;
 }
 
@@ -591,7 +586,7 @@ function setDownloadLoading(isLoading) {
   if (chooseFolderBtn) {
     chooseFolderBtn.disabled = isLoading;
   }
-  btn.textContent = isLoading ? "Preparing ZIP..." : "Download All PDFs (.zip)";
+  btn.textContent = isLoading ? "Preparing…" : "Download All PDFs";
 }
 
 function triggerBlobDownload(blob, fileName) {
@@ -718,14 +713,14 @@ async function restoreSavedDirectorySelection() {
     if (!hasPermission) {
       await clearSaveDirectorySelectionAndPersistedHandle();
       setStatus(
-        "Saved Dropbox folder needs permission again. Please choose *TICKETS WAITING TO BE SENT OUT.",
+        "Saved folder needs permission again. Please choose the save folder.",
         true
       );
       return;
     }
 
     state.saveDirHandle = dirHandle;
-    state.saveDirName = dirHandle?.name || "*TICKETS WAITING TO BE SENT OUT";
+    state.saveDirName = dirHandle?.name || "Selected folder";
     updateSaveLocationUi();
   } catch (_) {
     await clearSaveDirectorySelectionAndPersistedHandle();
@@ -794,7 +789,7 @@ $("buildBtn").addEventListener("click", async () => {
     setDownloadButtonVisibility(hasRows);
     setStatus(
       hasRows
-        ? `Built list: ${state.preview.length} email/PDF rows.`
+        ? `Ready — ${state.preview.length} email/PDF rows built.`
         : "Build complete, but no rows were produced.",
       !hasRows
     );
@@ -811,7 +806,7 @@ $("buildBtn").addEventListener("click", async () => {
 
 $("chooseFolderBtn").addEventListener("click", async () => {
   if (!supportsDirectoryPicker()) {
-    setStatus("Folder picker is not available in this browser. Downloads will use the normal save dialog.");
+    setStatus("Folder picker is not available in this browser.");
     return;
   }
 
@@ -823,7 +818,7 @@ $("chooseFolderBtn").addEventListener("click", async () => {
       await persistDirectoryHandle(dirHandle);
     } catch (_) {}
     updateSaveLocationUi();
-    setStatus(`Save location selected: ${state.saveDirName}`);
+    setStatus(`Save folder: ${state.saveDirName}`);
   } catch (err) {
     if (err && err.name === "AbortError") return;
     setStatus(`Could not select folder: ${err.message || "Unknown error"}`, true);
@@ -849,13 +844,13 @@ $("downloadAllBtn").addEventListener("click", async () => {
       const blob = await res.blob();
       const fileName = `${folderName}.zip`;
       triggerBlobDownload(blob, fileName);
-      setStatus("ZIP downloaded. Choose your save location in the browser download dialog.");
+      setStatus("Download started.");
     }
   } catch (err) {
     if (state.saveDirHandle) {
       await clearSaveDirectorySelectionAndPersistedHandle();
       setStatus(
-        `Could not save to selected folder (${err.message}). Folder selection was cleared; please choose it again.`,
+        `Could not save to folder (${err.message}). Please choose the folder again.`,
         true
       );
     } else {
