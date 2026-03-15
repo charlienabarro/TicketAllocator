@@ -42,6 +42,7 @@ const state = {
   manualPerformanceDate: "",
   manualPerformanceTime: "",
   needsPerformanceDetails: false,
+  hasBuiltPreview: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -59,8 +60,9 @@ function updatePerformanceDetailsUi() {
   const timeInput = $("performanceTimeInput");
   if (!wrap || !help || !dateInput || !timeInput) return;
 
-  wrap.hidden = !state.needsPerformanceDetails;
-  help.hidden = !state.needsPerformanceDetails;
+  const shouldShow = state.hasBuiltPreview && state.needsPerformanceDetails;
+  wrap.hidden = !shouldShow;
+  help.hidden = !shouldShow;
   dateInput.value = state.manualPerformanceDate;
   timeInput.value = state.manualPerformanceTime;
 }
@@ -91,6 +93,7 @@ function resetPerformanceDetails() {
   state.manualPerformanceDate = "";
   state.manualPerformanceTime = "";
   state.needsPerformanceDetails = false;
+  state.hasBuiltPreview = false;
   updatePerformanceDetailsUi();
 }
 
@@ -226,11 +229,42 @@ function extractPerformanceMetadataFromFileNames() {
   };
 }
 
+function getPerformanceContextText() {
+  return [
+    $("allocationCsvFile").files[0]?.name || "",
+    $("ticketsPdfFile").files[0]?.name || "",
+    state.showName || "",
+  ].join(" \n ");
+}
+
+function applyPerformanceContextHints(timeValue, contextText) {
+  const cleanTime = String(timeValue || "").trim();
+  const context = String(contextText || "");
+  if (!cleanTime) return "";
+
+  const matineeHint = /\bmat(?:inee)?\b/i.test(context);
+  if (!matineeHint) return cleanTime;
+
+  const match = cleanTime.match(/^(\d{1,2})\.(\d{2})(am|pm)$/i);
+  if (!match) return cleanTime;
+
+  const hour = Number(match[1]);
+  const meridiem = match[3].toLowerCase();
+  if (meridiem === "am" && hour >= 1 && hour <= 6) {
+    return `${hour}.${match[2]}pm`;
+  }
+  return cleanTime;
+}
+
 function applyDetectedPerformanceDetails(fileNameMetadata, previewMetadata) {
   const pdfDate = previewMetadata?.performance_date || "";
   const pdfTime = previewMetadata?.performance_time || "";
+  const contextText = getPerformanceContextText();
   state.detectedPerformanceDate = fileNameMetadata.performanceDate || pdfDate;
-  state.detectedPerformanceTime = fileNameMetadata.performanceTime || pdfTime;
+  state.detectedPerformanceTime = applyPerformanceContextHints(
+    fileNameMetadata.performanceTime || pdfTime,
+    contextText
+  );
   state.manualPerformanceDate = state.detectedPerformanceDate;
   state.manualPerformanceTime = state.detectedPerformanceTime;
   state.needsPerformanceDetails = !(state.detectedPerformanceDate && state.detectedPerformanceTime);
@@ -759,6 +793,8 @@ $("buildBtn").addEventListener("click", async () => {
     renderStats(data.stats || null);
     renderFailures(data.failures || []);
     const hasRows = state.preview.length > 0;
+    state.hasBuiltPreview = hasRows;
+    updatePerformanceDetailsUi();
     setDownloadButtonVisibility(hasRows);
     setStatus(
       hasRows
