@@ -386,47 +386,47 @@ function clearDragAssetCache() {
 }
 
 function wireDragPdf(linkEl, row) {
-  const safari = isSafariBrowser();
-  const href = safari ? getPdfDownloadHref(row) : getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
-  if (!href && !dragFile) return;
+  const blobUrl = dragAssets?.localUrl || "";
+
+  if (!dragFile && !blobUrl) return;
+
+  // Always set href to blob URL + download attribute.
+  // This is local-only (never exposes the website) and gives the browser
+  // a native file drag source for Apple Mail on macOS.
+  if (blobUrl) {
+    linkEl.href = blobUrl;
+    linkEl.download = fileName;
+  }
 
   linkEl.draggable = true;
   linkEl.setAttribute("draggable", "true");
   linkEl.style.webkitUserDrag = "element";
-  if (safari) {
-    // On Safari/macOS, preserve native link drag behavior for Mail.
-    return;
-  }
+
+  // On Safari/macOS, the native <a href download> drag is the only thing
+  // that works with Apple Mail. Do NOT add a custom dragstart.
+  if (isSafariBrowser()) return;
+
+  // On Chrome/other browsers, enhance with dt.items.add(file) for richer
+  // drop targets. But keep the <a href> blob fallback intact by NOT calling
+  // event.preventDefault() — if dt.items.add fails, the native drag still works.
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
 
-    try {
-      dt.clearData();
-    } catch (_) {}
-
-    let hasNativeFile = false;
+    // Try to add the real File object. This gives the best result when
+    // dropping into apps that support DataTransfer files.
     if (dragFile && dt.items && typeof dt.items.add === "function") {
       try {
-        const added = dt.items.add(dragFile);
-        hasNativeFile = Boolean(added && added.kind === "file");
+        dt.items.add(dragFile);
       } catch (_) {}
     }
 
-    if (href) {
-      setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
-      if (!hasNativeFile) {
-        setDragData(dt, "text/uri-list", href);
-      }
-    }
-
-    if (!hasNativeFile && !href) {
-      setDragData(dt, "text/plain", fileName);
-    }
+    // NO server URLs, NO DownloadURL, NO text/uri-list.
+    // The <a href=blob: download=name> handles everything else natively.
   });
 }
 
@@ -487,8 +487,7 @@ function renderPreview() {
       fileLink.className = "pdf-open-link";
 
       const dragLink = document.createElement("a");
-      const safari = isSafariBrowser();
-      dragLink.href = safari ? (downloadHref || dragHref || openHref) : (dragHref || openHref);
+      dragLink.href = dragHref || openHref;
       dragLink.download = row.pdf_file || "ticket.pdf";
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
