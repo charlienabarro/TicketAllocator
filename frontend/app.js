@@ -61,8 +61,13 @@ function updatePerformanceDetailsUi() {
   if (!wrap || !help || !dateInput || !timeInput) return;
 
   const shouldShow = state.hasBuiltPreview && state.needsPerformanceDetails;
-  wrap.hidden = !shouldShow;
-  help.hidden = !shouldShow;
+  if (shouldShow) {
+    wrap.removeAttribute("hidden");
+    help.removeAttribute("hidden");
+  } else {
+    wrap.setAttribute("hidden", "");
+    help.setAttribute("hidden", "");
+  }
   dateInput.value = state.manualPerformanceDate;
   timeInput.value = state.manualPerformanceTime;
 }
@@ -292,7 +297,7 @@ function buildBundleFolderName() {
   const showName = detectShowName().trim() || "Show";
   const details = getResolvedPerformanceDetails();
   if (!details.isComplete) {
-    throw new Error("Please add the performance date and time before saving the folder.");
+    throw new Error("Please add the performance date and time before saving.");
   }
   return sanitizeFolderName(`${showName} - ${details.performanceDate} - ${details.performanceTime}`);
 }
