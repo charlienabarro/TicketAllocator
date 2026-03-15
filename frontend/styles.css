@@ -36,32 +36,7 @@ body {
 
 .curtain-left,
 .curtain-right {
-  position: fixed;
-  top: 0;
-  bottom: 0;
-  width: 120px;
-  z-index: -2;
-  pointer-events: none;
-}
-
-.curtain-left {
-  left: 0;
-  background: linear-gradient(
-    90deg,
-    var(--curtain-l) 0%,
-    rgba(107, 22, 50, 0.6) 40%,
-    rgba(107, 22, 50, 0) 100%
-  );
-}
-
-.curtain-right {
-  right: 0;
-  background: linear-gradient(
-    270deg,
-    var(--curtain-r) 0%,
-    rgba(122, 31, 61, 0.6) 40%,
-    rgba(122, 31, 61, 0) 100%
-  );
+  display: none;
 }
 
 .stage-glow {
