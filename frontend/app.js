@@ -758,6 +758,7 @@ function buildEmlContent(row) {
   ].join("\r\n");
 
   const lines = [
+    `X-Unsent: 1`,
     `To: ${email}`,
     `Subject: ${subject}`,
     `MIME-Version: 1.0`,
