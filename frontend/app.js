@@ -386,47 +386,47 @@ function clearDragAssetCache() {
 }
 
 function wireDragPdf(linkEl, row) {
+  const safari = isSafariBrowser();
+  const href = safari ? getPdfDownloadHref(row) : getPdfDragHref(row);
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
-  const blobUrl = dragAssets?.localUrl || "";
-
-  if (!dragFile && !blobUrl) return;
-
-  // Always set href to blob URL + download attribute.
-  // This is local-only (never exposes the website) and gives the browser
-  // a native file drag source for Apple Mail on macOS.
-  if (blobUrl) {
-    linkEl.href = blobUrl;
-    linkEl.download = fileName;
-  }
+  if (!href && !dragFile) return;
 
   linkEl.draggable = true;
   linkEl.setAttribute("draggable", "true");
   linkEl.style.webkitUserDrag = "element";
-
-  // On Safari/macOS, the native <a href download> drag is the only thing
-  // that works with Apple Mail. Do NOT add a custom dragstart.
-  if (isSafariBrowser()) return;
-
-  // On Chrome/other browsers, enhance with dt.items.add(file) for richer
-  // drop targets. But keep the <a href> blob fallback intact by NOT calling
-  // event.preventDefault() — if dt.items.add fails, the native drag still works.
+  if (safari) {
+    // On Safari/macOS, preserve native link drag behavior for Mail.
+    return;
+  }
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
     dt.effectAllowed = "copy";
 
-    // Try to add the real File object. This gives the best result when
-    // dropping into apps that support DataTransfer files.
+    try {
+      dt.clearData();
+    } catch (_) {}
+
+    let hasNativeFile = false;
     if (dragFile && dt.items && typeof dt.items.add === "function") {
       try {
-        dt.items.add(dragFile);
+        const added = dt.items.add(dragFile);
+        hasNativeFile = Boolean(added && added.kind === "file");
       } catch (_) {}
     }
 
-    // NO server URLs, NO DownloadURL, NO text/uri-list.
-    // The <a href=blob: download=name> handles everything else natively.
+    if (href) {
+      setDragData(dt, "DownloadURL", `application/pdf:${fileName}:${href}`);
+      if (!hasNativeFile) {
+        setDragData(dt, "text/uri-list", href);
+      }
+    }
+
+    if (!hasNativeFile && !href) {
+      setDragData(dt, "text/plain", fileName);
+    }
   });
 }
 
@@ -475,19 +475,17 @@ function renderPreview() {
     const openHref = getPdfOpenHref(row);
     const dragHref = getPdfDragHref(row);
     const downloadHref = getPdfDownloadHref(row);
-    // For the clickable filename, prefer the server URL (works in new tabs).
-    // Blob URLs break when opened in a separate tab.
-    const previewHref = (row.pdf_url ? toAbsoluteUrl(row.pdf_url) : "") || openHref;
-    if (previewHref && row.pdf_file) {
+    const safari = isSafariBrowser();
+    if (openHref && row.pdf_file) {
       const fileLink = document.createElement("a");
-      fileLink.href = previewHref;
+      fileLink.href = openHref;
       fileLink.textContent = row.pdf_file;
       fileLink.target = "_blank";
       fileLink.rel = "noopener noreferrer";
       fileLink.className = "pdf-open-link";
 
       const dragLink = document.createElement("a");
-      dragLink.href = dragHref || openHref;
+      dragLink.href = safari ? (downloadHref || dragHref || openHref) : (dragHref || openHref);
       dragLink.download = row.pdf_file || "ticket.pdf";
       dragLink.textContent = "Drag PDF";
       dragLink.className = "pdf-drag-link";
