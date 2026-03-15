@@ -61,6 +61,47 @@ RESERVED_ROW_TOKENS = {
     "SE",
     "NE",
 }
+MONTH_NAME_TO_ABBR = {
+    "JANUARY": "Jan",
+    "JAN": "Jan",
+    "FEBRUARY": "Feb",
+    "FEB": "Feb",
+    "MARCH": "Mar",
+    "MAR": "Mar",
+    "APRIL": "Apr",
+    "APR": "Apr",
+    "MAY": "May",
+    "JUNE": "Jun",
+    "JUN": "Jun",
+    "JULY": "Jul",
+    "JUL": "Jul",
+    "AUGUST": "Aug",
+    "AUG": "Aug",
+    "SEPTEMBER": "Sep",
+    "SEPT": "Sep",
+    "SEP": "Sep",
+    "OCTOBER": "Oct",
+    "OCT": "Oct",
+    "NOVEMBER": "Nov",
+    "NOV": "Nov",
+    "DECEMBER": "Dec",
+    "DEC": "Dec",
+}
+MONTH_PATTERN = (
+    r"JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|"
+    r"AUG(?:UST)?|SEP(?:T(?:EMBER)?)?|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?"
+)
+MONTH_DAY_RE = re.compile(
+    rf"\b({MONTH_PATTERN})\.?\s+(\d{{1,2}})(?:ST|ND|RD|TH)?(?:,\s*\d{{2,4}})?\b",
+    re.IGNORECASE,
+)
+DAY_MONTH_RE = re.compile(
+    rf"\b(\d{{1,2}})(?:ST|ND|RD|TH)?\s+({MONTH_PATTERN})\.?(?:,\s*\d{{2,4}})?\b",
+    re.IGNORECASE,
+)
+TIME_12H_RE = re.compile(r"\b(\d{1,2})(?::|\.)(\d{2})\s*([AP])\.?\s*M\.?\b", re.IGNORECASE)
+TIME_12H_COMPACT_RE = re.compile(r"\b(\d{1,2})\s*([AP])\.?\s*M\.?\b", re.IGNORECASE)
+TIME_24H_RE = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
 
 
 @dataclass(slots=True)
@@ -323,6 +364,134 @@ def extract_pdf_page_seat_map(pdf_bytes: bytes, expected_seats: set[str] | None 
         )
 
     return seat_to_page
+
+
+def extract_ticket_performance_metadata(pdf_bytes: bytes) -> dict[str, str | bool | None]:
+    PdfReader, _ = _load_pdf_backend()
+    reader = PdfReader(BytesIO(pdf_bytes))
+
+    text_parts: list[str] = []
+    for page in reader.pages[:5]:
+        try:
+            page_text = page.extract_text() or ""
+        except Exception:
+            page_text = ""
+        if page_text.strip():
+            text_parts.append(page_text)
+
+        content_tokens = _extract_string_literals_from_pdf_content(_extract_page_content_bytes(page))
+        if content_tokens:
+            text_parts.append(" ".join(content_tokens))
+
+    combined_text = "\n".join(part for part in text_parts if part.strip())
+    date_candidates = _extract_performance_date_candidates(combined_text)
+    time_candidates = _extract_performance_time_candidates(combined_text)
+    date_value = date_candidates[0] if len(date_candidates) == 1 else None
+    time_value = time_candidates[0] if len(time_candidates) == 1 else None
+
+    return {
+        "performance_date": date_value,
+        "performance_time": time_value,
+        "confidence": bool(date_value and time_value),
+    }
+
+
+def _extract_performance_date_candidates(text: str) -> list[str]:
+    if not text:
+        return []
+
+    matches: list[str] = []
+    for match in MONTH_DAY_RE.finditer(text):
+        month = _normalize_month(match.group(1))
+        day = _normalize_day(match.group(2))
+        if month and day:
+            matches.append(f"{month} {day}")
+
+    for match in DAY_MONTH_RE.finditer(text):
+        month = _normalize_month(match.group(2))
+        day = _normalize_day(match.group(1))
+        if month and day:
+            matches.append(f"{month} {day}")
+
+    return _dedupe_strings(matches)
+
+
+def _extract_performance_time_candidates(text: str) -> list[str]:
+    if not text:
+        return []
+
+    matches: list[str] = []
+    for match in TIME_12H_RE.finditer(text):
+        formatted = _format_12h_time(match.group(1), match.group(2), match.group(3))
+        if formatted:
+            matches.append(formatted)
+
+    for match in TIME_12H_COMPACT_RE.finditer(text):
+        formatted = _format_12h_time(match.group(1), "00", match.group(2))
+        if formatted:
+            matches.append(formatted)
+
+    for match in TIME_24H_RE.finditer(text):
+        formatted = _format_24h_time(match.group(1), match.group(2))
+        if formatted:
+            matches.append(formatted)
+
+    return _dedupe_strings(matches)
+
+
+def _normalize_month(value: str) -> str | None:
+    clean = re.sub(r"[^A-Za-z]", "", value or "").upper()
+    return MONTH_NAME_TO_ABBR.get(clean)
+
+
+def _normalize_day(value: str) -> str | None:
+    try:
+        day = int(re.sub(r"[^0-9]", "", value or ""))
+    except ValueError:
+        return None
+    if day <= 0 or day > 31:
+        return None
+    return str(day)
+
+
+def _format_12h_time(hour_value: str, minute_value: str, meridiem_value: str) -> str | None:
+    try:
+        hour = int(hour_value)
+        minute = int(minute_value)
+    except (TypeError, ValueError):
+        return None
+    if hour <= 0 or hour > 12 or minute < 0 or minute > 59:
+        return None
+    meridiem = (meridiem_value or "").strip().lower()
+    if meridiem not in {"a", "p"}:
+        return None
+    return f"{hour}.{minute:02d}{meridiem}m"
+
+
+def _format_24h_time(hour_value: str, minute_value: str) -> str | None:
+    try:
+        hour = int(hour_value)
+        minute = int(minute_value)
+    except (TypeError, ValueError):
+        return None
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return None
+
+    meridiem = "am" if hour < 12 else "pm"
+    display_hour = hour % 12 or 12
+    return f"{display_hour}.{minute:02d}{meridiem}"
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = value.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value.strip())
+    return deduped
 
 
 def build_booking_groups(

@@ -1,12 +1,16 @@
 import unittest
+from unittest.mock import patch
 
 from allocator.ticket_bundle import (
+    _extract_performance_date_candidates,
+    _extract_performance_time_candidates,
     _extract_expected_seats_from_text,
     _extract_seat_tokens,
     _extract_seat_tokens_from_pdf_content_data,
     _normalize_seat_labels,
     build_output_filenames,
     build_booking_groups,
+    extract_ticket_performance_metadata,
     output_pdf_filename,
     parse_allocation_csv,
     parse_seat_list,
@@ -68,6 +72,48 @@ class TicketBundleTests(unittest.TestCase):
         text = "Mon 16 Mar 2026 19:00 Dress Circle B1Paddington The Musical"
         parsed = _extract_seat_tokens(text)
         self.assertEqual(parsed, ["B1"])
+
+    def test_extract_performance_date_candidates_prefers_month_day(self) -> None:
+        parsed = _extract_performance_date_candidates("Paddington Sat 15 March 2026 7:30pm")
+        self.assertEqual(parsed, ["Mar 15"])
+
+    def test_extract_performance_time_candidates_formats_24_hour_time(self) -> None:
+        parsed = _extract_performance_time_candidates("Paddington Sat 15 March 2026 19:30")
+        self.assertEqual(parsed, ["7.30pm"])
+
+    def test_extract_ticket_performance_metadata_from_pdf_text(self) -> None:
+        class FakePage:
+            def extract_text(self) -> str:
+                return "Paddington The Musical\nSat 15 March 2026\n7:30pm"
+
+        class FakeReader:
+            def __init__(self, _stream) -> None:
+                self.pages = [FakePage()]
+
+        with patch("allocator.ticket_bundle._load_pdf_backend", return_value=(FakeReader, object)):
+            parsed = extract_ticket_performance_metadata(b"%PDF-pretend")
+
+        self.assertEqual(
+            parsed,
+            {"performance_date": "Mar 15", "performance_time": "7.30pm", "confidence": True},
+        )
+
+    def test_extract_ticket_performance_metadata_marks_ambiguous_time_low_confidence(self) -> None:
+        class FakePage:
+            def extract_text(self) -> str:
+                return "Sat 15 March 2026\nDoors 6:30pm\nPerformance 7:30pm"
+
+        class FakeReader:
+            def __init__(self, _stream) -> None:
+                self.pages = [FakePage()]
+
+        with patch("allocator.ticket_bundle._load_pdf_backend", return_value=(FakeReader, object)):
+            parsed = extract_ticket_performance_metadata(b"%PDF-pretend")
+
+        self.assertEqual(
+            parsed,
+            {"performance_date": "Mar 15", "performance_time": None, "confidence": False},
+        )
 
     def test_extract_seat_tokens_from_compact_token_before_order(self) -> None:
         text = "RoStalls A18Order 38238468"

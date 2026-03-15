@@ -3,12 +3,45 @@ const DEFAULT_SAVE_LOCATION_HINT =
 const SAVE_LOCATION_DB_NAME = "ticket-allocator-save-location";
 const SAVE_LOCATION_STORE_NAME = "handles";
 const SAVE_LOCATION_HANDLE_KEY = "default-save-dir";
+const MONTH_ALIASES = {
+  jan: "Jan",
+  january: "Jan",
+  feb: "Feb",
+  february: "Feb",
+  mar: "Mar",
+  march: "Mar",
+  apr: "Apr",
+  april: "Apr",
+  may: "May",
+  jun: "Jun",
+  june: "Jun",
+  jul: "Jul",
+  july: "Jul",
+  aug: "Aug",
+  august: "Aug",
+  sep: "Sep",
+  sept: "Sep",
+  september: "Sep",
+  oct: "Oct",
+  october: "Oct",
+  nov: "Nov",
+  november: "Nov",
+  dec: "Dec",
+  december: "Dec",
+};
+const MONTH_PATTERN =
+  "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
 
 const state = {
   preview: [],
   showName: "",
   saveDirHandle: null,
   saveDirName: DEFAULT_SAVE_LOCATION_HINT,
+  detectedPerformanceDate: "",
+  detectedPerformanceTime: "",
+  manualPerformanceDate: "",
+  manualPerformanceTime: "",
+  needsPerformanceDetails: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -17,6 +50,19 @@ function setStatus(message, isError = false) {
   const el = $("opsStatus");
   el.textContent = message;
   el.style.color = isError ? "#b91c1c" : "#0f766e";
+}
+
+function updatePerformanceDetailsUi() {
+  const wrap = $("performanceDetailsFields");
+  const help = $("performanceDetailsHelp");
+  const dateInput = $("performanceDateInput");
+  const timeInput = $("performanceTimeInput");
+  if (!wrap || !help || !dateInput || !timeInput) return;
+
+  wrap.hidden = !state.needsPerformanceDetails;
+  help.hidden = !state.needsPerformanceDetails;
+  dateInput.value = state.manualPerformanceDate;
+  timeInput.value = state.manualPerformanceTime;
 }
 
 function updateSaveLocationUi() {
@@ -37,6 +83,15 @@ function setDownloadButtonVisibility(isVisible) {
 
 function resetDownloadAvailability() {
   setDownloadButtonVisibility(false);
+}
+
+function resetPerformanceDetails() {
+  state.detectedPerformanceDate = "";
+  state.detectedPerformanceTime = "";
+  state.manualPerformanceDate = "";
+  state.manualPerformanceTime = "";
+  state.needsPerformanceDetails = false;
+  updatePerformanceDetailsUi();
 }
 
 function getFiles() {
@@ -69,6 +124,143 @@ function maybePrefillShowName() {
   const input = $("showNameInput");
   if (input.value.trim()) return;
   input.value = detectShowName();
+}
+
+function normalizeMonth(value) {
+  const key = (value || "").toLowerCase().replace(/[^a-z]/g, "");
+  return MONTH_ALIASES[key] || "";
+}
+
+function normalizeDay(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  const day = Number(digits);
+  if (!Number.isInteger(day) || day <= 0 || day > 31) return "";
+  return String(day);
+}
+
+function format12hTime(hourValue, minuteValue, meridiemValue) {
+  const hour = Number(hourValue);
+  const minute = Number(minuteValue);
+  const meridiem = String(meridiemValue || "").trim().toLowerCase();
+  if (!Number.isInteger(hour) || hour <= 0 || hour > 12) return "";
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return "";
+  if (!["a", "p"].includes(meridiem)) return "";
+  return `${hour}.${String(minute).padStart(2, "0")}${meridiem}m`;
+}
+
+function format24hTime(hourValue, minuteValue) {
+  const hour = Number(hourValue);
+  const minute = Number(minuteValue);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return "";
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return "";
+  const meridiem = hour < 12 ? "am" : "pm";
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}.${String(minute).padStart(2, "0")}${meridiem}`;
+}
+
+function dedupeStrings(values) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    const clean = String(value || "").trim();
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+}
+
+function extractDateCandidates(text) {
+  if (!text) return [];
+  const values = [];
+  const monthDayRe = new RegExp(`\\b(${MONTH_PATTERN})[.\\s,_-]+(\\d{1,2})(?:st|nd|rd|th)?(?:[.,\\s_-]+\\d{2,4})?\\b`, "ig");
+  const dayMonthRe = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?[.\\s,_-]+(${MONTH_PATTERN})(?:[.,\\s_-]+\\d{2,4})?\\b`, "ig");
+
+  for (const match of text.matchAll(monthDayRe)) {
+    const month = normalizeMonth(match[1]);
+    const day = normalizeDay(match[2]);
+    if (month && day) values.push(`${month} ${day}`);
+  }
+  for (const match of text.matchAll(dayMonthRe)) {
+    const month = normalizeMonth(match[2]);
+    const day = normalizeDay(match[1]);
+    if (month && day) values.push(`${month} ${day}`);
+  }
+  return dedupeStrings(values);
+}
+
+function extractTimeCandidates(text) {
+  if (!text) return [];
+  const values = [];
+  const twelveHourRe = /\b(\d{1,2})(?::|\.)(\d{2})\s*([ap])\.?\s*m\.?\b/ig;
+  const twelveHourCompactRe = /\b(\d{1,2})\s*([ap])\.?\s*m\.?\b/ig;
+  const twentyFourHourRe = /\b([01]?\d|2[0-3])[:.](\d{2})\b/g;
+
+  for (const match of text.matchAll(twelveHourRe)) {
+    const formatted = format12hTime(match[1], match[2], match[3]);
+    if (formatted) values.push(formatted);
+  }
+  for (const match of text.matchAll(twelveHourCompactRe)) {
+    const formatted = format12hTime(match[1], "00", match[2]);
+    if (formatted) values.push(formatted);
+  }
+  for (const match of text.matchAll(twentyFourHourRe)) {
+    const formatted = format24hTime(match[1], match[2]);
+    if (formatted) values.push(formatted);
+  }
+  return dedupeStrings(values);
+}
+
+function extractPerformanceMetadataFromFileNames() {
+  const candidates = [
+    $("allocationCsvFile").files[0]?.name || "",
+    $("ticketsPdfFile").files[0]?.name || "",
+  ].join(" \n ");
+  const dates = extractDateCandidates(candidates);
+  const times = extractTimeCandidates(candidates);
+  return {
+    performanceDate: dates.length === 1 ? dates[0] : "",
+    performanceTime: times.length === 1 ? times[0] : "",
+  };
+}
+
+function applyDetectedPerformanceDetails(fileNameMetadata, previewMetadata) {
+  const pdfDate = previewMetadata?.performance_date || "";
+  const pdfTime = previewMetadata?.performance_time || "";
+  state.detectedPerformanceDate = fileNameMetadata.performanceDate || pdfDate;
+  state.detectedPerformanceTime = fileNameMetadata.performanceTime || pdfTime;
+  state.manualPerformanceDate = state.detectedPerformanceDate;
+  state.manualPerformanceTime = state.detectedPerformanceTime;
+  state.needsPerformanceDetails = !(state.detectedPerformanceDate && state.detectedPerformanceTime);
+  updatePerformanceDetailsUi();
+}
+
+function getResolvedPerformanceDetails() {
+  const dateValue = (state.manualPerformanceDate || state.detectedPerformanceDate || "").trim();
+  const timeValue = (state.manualPerformanceTime || state.detectedPerformanceTime || "").trim();
+  return {
+    performanceDate: dateValue,
+    performanceTime: timeValue,
+    isComplete: Boolean(dateValue && timeValue),
+  };
+}
+
+function sanitizeFolderName(value) {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildBundleFolderName() {
+  const showName = detectShowName().trim() || "Show";
+  const details = getResolvedPerformanceDetails();
+  if (!details.isComplete) {
+    throw new Error("Please add the performance date and time before saving the folder.");
+  }
+  return sanitizeFolderName(`${showName} - ${details.performanceDate} - ${details.performanceTime}`);
 }
 
 function toAbsoluteUrl(pathOrUrl) {
@@ -525,10 +717,6 @@ function toDataUrlPdfBlob(dataUrl) {
   }
 }
 
-function toSafeSlug(text, fallback = "Show") {
-  return (text || fallback).replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || fallback;
-}
-
 async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
   if (!state.saveDirHandle) return 0;
   const hasPermission = await ensureDirectoryWritePermission(state.saveDirHandle);
@@ -566,6 +754,7 @@ $("buildBtn").addEventListener("click", async () => {
     const data = await res.json();
     clearDragAssetCache();
     state.preview = data.rows || [];
+    applyDetectedPerformanceDetails(extractPerformanceMetadataFromFileNames(), data.performance_metadata || null);
     renderPreview();
     renderStats(data.stats || null);
     renderFailures(data.failures || []);
@@ -578,6 +767,7 @@ $("buildBtn").addEventListener("click", async () => {
       !hasRows
     );
   } catch (err) {
+    resetPerformanceDetails();
     setDownloadButtonVisibility(false);
     renderStats(null);
     renderFailures([]);
@@ -612,12 +802,11 @@ $("downloadAllBtn").addEventListener("click", async () => {
   setDownloadLoading(true);
   try {
     maybePrefillShowName();
-    const showName = toSafeSlug(detectShowName(), "Show");
+    const folderName = buildBundleFolderName();
     if (state.saveDirHandle) {
       if (!state.preview.length) {
         throw new Error("Build the email list first.");
       }
-      const folderName = `${showName}_ticket_bundle`;
       const writtenCount = await writePreviewPdfsToSelectedDirectory(state.preview, folderName);
       if (writtenCount === 0) {
         throw new Error("No PDF files were available to save.");
@@ -626,7 +815,7 @@ $("downloadAllBtn").addEventListener("click", async () => {
     } else {
       const res = await uploadAndFetch("/ticket-bundles/generate");
       const blob = await res.blob();
-      const fileName = `${showName}_ticket_bundle.zip`;
+      const fileName = `${folderName}.zip`;
       triggerBlobDownload(blob, fileName);
       setStatus("ZIP downloaded. Choose your save location in the browser download dialog.");
     }
@@ -648,6 +837,7 @@ $("downloadAllBtn").addEventListener("click", async () => {
 $("allocationCsvFile").addEventListener("change", () => {
   maybePrefillShowName();
   resetDownloadAvailability();
+  resetPerformanceDetails();
   const file = $("allocationCsvFile").files[0];
   const nameEl = document.querySelector("#dropZoneAllocation .drop-file-name");
   if (nameEl) nameEl.textContent = file ? file.name : "";
@@ -655,12 +845,20 @@ $("allocationCsvFile").addEventListener("change", () => {
 $("ticketsPdfFile").addEventListener("change", () => {
   maybePrefillShowName();
   resetDownloadAvailability();
+  resetPerformanceDetails();
   const file = $("ticketsPdfFile").files[0];
   const nameEl = document.querySelector("#dropZonePdf .drop-file-name");
   if (nameEl) nameEl.textContent = file ? file.name : "";
 });
+$("performanceDateInput").addEventListener("input", (event) => {
+  state.manualPerformanceDate = event.target.value;
+});
+$("performanceTimeInput").addEventListener("input", (event) => {
+  state.manualPerformanceTime = event.target.value;
+});
 window.addEventListener("beforeunload", clearDragAssetCache);
 updateSaveLocationUi();
+updatePerformanceDetailsUi();
 resetDownloadAvailability();
 restoreSavedDirectorySelection();
 

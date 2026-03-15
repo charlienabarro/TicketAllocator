@@ -28,6 +28,7 @@ from allocator.ticket_bundle import (
     build_group_pdf,
     build_bundle_zip,
     extract_pdf_page_seat_map,
+    extract_ticket_performance_metadata,
     parse_allocation_csv,
     parse_seat_list,
 )
@@ -76,6 +77,7 @@ async def preview_ticket_bundle(
     filenames = build_output_filenames(groups)
     preview_files = _build_preview_files(pdf_content, groups, filenames)
     preview_id = _store_preview_files(preview_files)
+    performance_metadata = extract_ticket_performance_metadata(pdf_content)
     missing_unique = {seat for group in groups for seat in group.missing_seats}
     matched_unique = {seat for group in groups for seat in group.seat_labels if seat in seat_map}
 
@@ -105,6 +107,7 @@ async def preview_ticket_bundle(
             "missing_seat_count": len(missing_unique),
             "output_pdf_count": len(groups),
         },
+        "performance_metadata": performance_metadata,
     }
 
 
