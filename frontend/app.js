@@ -84,7 +84,7 @@ function setDownloadButtonVisibility(isVisible) {
   btn.hidden = !isVisible;
   if (!isVisible) {
     btn.disabled = false;
-    btn.textContent = "Download All PDFs";
+    btn.textContent = "Download All PDFs (.zip)";
   }
 }
 
@@ -154,7 +154,7 @@ function format12hTime(hourValue, minuteValue, meridiemValue) {
   if (!Number.isInteger(hour) || hour <= 0 || hour > 12) return "";
   if (!Number.isInteger(minute) || minute < 0 || minute > 59) return "";
   if (!["a", "p"].includes(meridiem)) return "";
-  return `${hour}.${String(minute).padStart(2, "0")}${meridiem}m`;
+  return `${hour}.${String(minute).padStart(2, "0")}`;
 }
 
 function format24hTime(hourValue, minuteValue) {
@@ -162,9 +162,8 @@ function format24hTime(hourValue, minuteValue) {
   const minute = Number(minuteValue);
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) return "";
   if (!Number.isInteger(minute) || minute < 0 || minute > 59) return "";
-  const meridiem = hour < 12 ? "am" : "pm";
   const displayHour = hour % 12 || 12;
-  return `${displayHour}.${String(minute).padStart(2, "0")}${meridiem}`;
+  return `${displayHour}.${String(minute).padStart(2, "0")}`;
 }
 
 function dedupeStrings(values) {
@@ -575,7 +574,7 @@ function setBuildLoading(isLoading) {
   if (chooseFolderBtn) {
     chooseFolderBtn.disabled = isLoading;
   }
-  btn.textContent = isLoading ? "Building…" : "Build Email List";
+  btn.textContent = isLoading ? "Building..." : "Build Email PDF List";
   progress.hidden = !isLoading;
 }
 
@@ -591,7 +590,7 @@ function setDownloadLoading(isLoading) {
   if (chooseFolderBtn) {
     chooseFolderBtn.disabled = isLoading;
   }
-  btn.textContent = isLoading ? "Preparing…" : "Download All PDFs";
+  btn.textContent = isLoading ? "Preparing ZIP..." : "Download All PDFs (.zip)";
 }
 
 function triggerBlobDownload(blob, fileName) {
@@ -747,6 +746,33 @@ function toDataUrlPdfBlob(dataUrl) {
   }
 }
 
+function buildEmlContent(row) {
+  const email = (row.email || "").trim();
+  if (!email) return null;
+  const showName = state.showName || "Show";
+  const subject = `Your ${showName} tickets are here!`;
+  const body = [
+    `Hi - here are your tickets for ${showName}. Do let me know if you have any questions, but otherwise please check all the information including the date to make sure everything is correct and please keep them somewhere safe on your phone so that the bar code can be scanned on arrival.`,
+    "",
+    "Please do shout if you have any questions, but otherwise, have a brilliant time!",
+  ].join("\r\n");
+
+  const lines = [
+    `To: ${email}`,
+    `Subject: ${subject}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: text/plain; charset="UTF-8"`,
+    ``,
+    body,
+  ];
+  return lines.join("\r\n");
+}
+
+function emlFileName(pdfFileName) {
+  if (!pdfFileName) return "email.eml";
+  return pdfFileName.replace(/\.pdf$/i, "_email.eml");
+}
+
 async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
   if (!state.saveDirHandle) return 0;
   const hasPermission = await ensureDirectoryWritePermission(state.saveDirHandle);
@@ -762,6 +788,7 @@ async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
     const blob = toDataUrlPdfBlob(row?.pdf_data_url || "");
     if (!fileName || !blob) continue;
 
+    // Write PDF
     const fileHandle = await outputDirHandle.getFileHandle(fileName, { create: true });
     const writable = await fileHandle.createWritable();
     try {
@@ -769,6 +796,19 @@ async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
       writtenCount += 1;
     } finally {
       await writable.close();
+    }
+
+    // Write .eml draft
+    const emlContent = buildEmlContent(row);
+    if (emlContent) {
+      const emlName = emlFileName(fileName);
+      const emlHandle = await outputDirHandle.getFileHandle(emlName, { create: true });
+      const emlWritable = await emlHandle.createWritable();
+      try {
+        await emlWritable.write(new Blob([emlContent], { type: "message/rfc822" }));
+      } finally {
+        await emlWritable.close();
+      }
     }
   }
 
@@ -830,6 +870,138 @@ $("chooseFolderBtn").addEventListener("click", async () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Minimal client-side ZIP builder (store method, no compression)
+// ---------------------------------------------------------------------------
+
+async function buildClientZip(previewRows, folderPrefix) {
+  const entries = await _collectZipEntries(previewRows, folderPrefix);
+  return _buildZipFromEntries(entries);
+}
+
+async function _collectZipEntries(previewRows, folderPrefix) {
+  const entries = [];
+
+  for (const row of previewRows) {
+    const pdfName = row?.pdf_file || "";
+    if (pdfName && row?.pdf_data_url) {
+      const dataUrl = row.pdf_data_url;
+      if (dataUrl.startsWith("data:application/pdf;base64,")) {
+        const base64 = dataUrl.slice("data:application/pdf;base64,".length);
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        entries.push({ name: `${folderPrefix}/${pdfName}`, data: bytes });
+      }
+    }
+
+    const emlContent = buildEmlContent(row);
+    if (emlContent && pdfName) {
+      const emlName = emlFileName(pdfName);
+      const emlBytes = new TextEncoder().encode(emlContent);
+      entries.push({ name: `${folderPrefix}/${emlName}`, data: emlBytes });
+    }
+  }
+
+  return entries;
+}
+
+function _buildZipFromEntries(entries) {
+  const encoder = new TextEncoder();
+  const centralRecords = [];
+  const localParts = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const nameBytes = encoder.encode(entry.name);
+    const data = entry.data;
+    const crc = crc32(data);
+    const size = data.length;
+
+    // Local file header (30 bytes + name + data)
+    const local = new ArrayBuffer(30 + nameBytes.length);
+    const lv = new DataView(local);
+    lv.setUint32(0, 0x04034b50, true);  // signature
+    lv.setUint16(4, 20, true);           // version needed
+    lv.setUint16(6, 0, true);            // flags
+    lv.setUint16(8, 0, true);            // compression (store)
+    lv.setUint16(10, 0, true);           // mod time
+    lv.setUint16(12, 0, true);           // mod date
+    lv.setUint32(14, crc, true);         // crc32
+    lv.setUint32(18, size, true);        // compressed size
+    lv.setUint32(22, size, true);        // uncompressed size
+    lv.setUint16(26, nameBytes.length, true); // name length
+    lv.setUint16(28, 0, true);           // extra length
+    new Uint8Array(local).set(nameBytes, 30);
+
+    localParts.push(new Uint8Array(local));
+    localParts.push(data);
+
+    // Central directory record
+    const central = new ArrayBuffer(46 + nameBytes.length);
+    const cv = new DataView(central);
+    cv.setUint32(0, 0x02014b50, true);   // signature
+    cv.setUint16(4, 20, true);            // version made by
+    cv.setUint16(6, 20, true);            // version needed
+    cv.setUint16(8, 0, true);             // flags
+    cv.setUint16(10, 0, true);            // compression
+    cv.setUint16(12, 0, true);            // mod time
+    cv.setUint16(14, 0, true);            // mod date
+    cv.setUint32(16, crc, true);          // crc32
+    cv.setUint32(20, size, true);         // compressed size
+    cv.setUint32(24, size, true);         // uncompressed size
+    cv.setUint16(28, nameBytes.length, true); // name length
+    cv.setUint16(30, 0, true);            // extra length
+    cv.setUint16(32, 0, true);            // comment length
+    cv.setUint16(34, 0, true);            // disk number
+    cv.setUint16(36, 0, true);            // internal attrs
+    cv.setUint32(38, 0, true);            // external attrs
+    cv.setUint32(42, offset, true);       // local header offset
+    new Uint8Array(central).set(nameBytes, 46);
+
+    centralRecords.push(new Uint8Array(central));
+    offset += 30 + nameBytes.length + size;
+  }
+
+  const centralStart = offset;
+  let centralSize = 0;
+  for (const rec of centralRecords) centralSize += rec.length;
+
+  // End of central directory (22 bytes)
+  const eocd = new ArrayBuffer(22);
+  const ev = new DataView(eocd);
+  ev.setUint32(0, 0x06054b50, true);     // signature
+  ev.setUint16(4, 0, true);               // disk number
+  ev.setUint16(6, 0, true);               // central dir disk
+  ev.setUint16(8, entries.length, true);   // entries on disk
+  ev.setUint16(10, entries.length, true);  // total entries
+  ev.setUint32(12, centralSize, true);     // central dir size
+  ev.setUint32(16, centralStart, true);    // central dir offset
+  ev.setUint16(20, 0, true);              // comment length
+
+  const allParts = [...localParts, ...centralRecords, new Uint8Array(eocd)];
+  const totalSize = allParts.reduce((s, p) => s + p.length, 0);
+  const result = new Uint8Array(totalSize);
+  let pos = 0;
+  for (const part of allParts) {
+    result.set(part, pos);
+    pos += part.length;
+  }
+
+  return new Blob([result], { type: "application/zip" });
+}
+
+function crc32(data) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < data.length; i++) {
+    crc ^= data[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+    }
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
 $("downloadAllBtn").addEventListener("click", async () => {
   setDownloadLoading(true);
   try {
@@ -843,12 +1015,14 @@ $("downloadAllBtn").addEventListener("click", async () => {
       if (writtenCount === 0) {
         throw new Error("No PDF files were available to save.");
       }
-      setStatus(`${writtenCount} PDF(s) saved to ${state.saveDirName}/${folderName}.`);
+      setStatus(`${writtenCount} PDF(s) and email drafts saved to ${state.saveDirName}/${folderName}.`);
     } else {
-      const res = await uploadAndFetch("/ticket-bundles/generate");
-      const blob = await res.blob();
+      if (!state.preview.length) {
+        throw new Error("Build the email list first.");
+      }
+      const zipBlob = await buildClientZip(state.preview, folderName);
       const fileName = `${folderName}.zip`;
-      triggerBlobDownload(blob, fileName);
+      triggerBlobDownload(zipBlob, fileName);
       setStatus("Download started.");
     }
   } catch (err) {
