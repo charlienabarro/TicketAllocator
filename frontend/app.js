@@ -60,7 +60,7 @@ function updatePerformanceDetailsUi() {
   const timeInput = $("performanceTimeInput");
   if (!wrap || !help || !dateInput || !timeInput) return;
 
-  const shouldShow = state.hasBuiltPreview && state.needsPerformanceDetails;
+  const shouldShow = state.hasBuiltPreview;
   if (shouldShow) {
     wrap.removeAttribute("hidden");
     help.removeAttribute("hidden");
