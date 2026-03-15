@@ -746,7 +746,7 @@ function toDataUrlPdfBlob(dataUrl) {
   }
 }
 
-function buildEmlContent(row) {
+function buildEmailFileContent(row) {
   const email = (row.email || "").trim();
   if (!email) return null;
   const showName = state.showName || "Show";
@@ -755,23 +755,29 @@ function buildEmlContent(row) {
     `Hi - here are your tickets for ${showName}. Do let me know if you have any questions, but otherwise please check all the information including the date to make sure everything is correct and please keep them somewhere safe on your phone so that the bar code can be scanned on arrival.`,
     "",
     "Please do shout if you have any questions, but otherwise, have a brilliant time!",
-  ].join("\r\n");
+  ].join("\n");
 
-  const lines = [
-    `X-Unsent: 1`,
-    `To: ${email}`,
-    `Subject: ${subject}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: text/plain; charset="UTF-8"`,
-    ``,
-    body,
-  ];
-  return lines.join("\r\n");
+  const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  // .webloc is a macOS plist URL shortcut. Double-clicking opens the mailto:
+  // link in Apple Mail as a fully editable compose window.
+  const plist = [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+    `<plist version="1.0">`,
+    `<dict>`,
+    `\t<key>URL</key>`,
+    `\t<string>${mailto}</string>`,
+    `</dict>`,
+    `</plist>`,
+  ].join("\n");
+
+  return plist;
 }
 
-function emlFileName(pdfFileName) {
-  if (!pdfFileName) return "email.eml";
-  return pdfFileName.replace(/\.pdf$/i, "_email.eml");
+function emailFileName(pdfFileName) {
+  if (!pdfFileName) return "email.webloc";
+  return pdfFileName.replace(/\.pdf$/i, "_email.webloc");
 }
 
 async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
@@ -799,16 +805,16 @@ async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
       await writable.close();
     }
 
-    // Write .eml draft
-    const emlContent = buildEmlContent(row);
-    if (emlContent) {
-      const emlName = emlFileName(fileName);
-      const emlHandle = await outputDirHandle.getFileHandle(emlName, { create: true });
-      const emlWritable = await emlHandle.createWritable();
+    // Write email compose shortcut
+    const emailContent = buildEmailFileContent(row);
+    if (emailContent) {
+      const emailName = emailFileName(fileName);
+      const emailHandle = await outputDirHandle.getFileHandle(emailName, { create: true });
+      const emailWritable = await emailHandle.createWritable();
       try {
-        await emlWritable.write(new Blob([emlContent], { type: "message/rfc822" }));
+        await emailWritable.write(new Blob([emailContent], { type: "application/xml" }));
       } finally {
-        await emlWritable.close();
+        await emailWritable.close();
       }
     }
   }
@@ -896,11 +902,11 @@ async function _collectZipEntries(previewRows, folderPrefix) {
       }
     }
 
-    const emlContent = buildEmlContent(row);
-    if (emlContent && pdfName) {
-      const emlName = emlFileName(pdfName);
-      const emlBytes = new TextEncoder().encode(emlContent);
-      entries.push({ name: `${folderPrefix}/${emlName}`, data: emlBytes });
+    const emailContent = buildEmailFileContent(row);
+    if (emailContent && pdfName) {
+      const emailName = emailFileName(pdfName);
+      const emailBytes = new TextEncoder().encode(emailContent);
+      entries.push({ name: `${folderPrefix}/${emailName}`, data: emailBytes });
     }
   }
 
