@@ -314,10 +314,6 @@ function buildMailtoHref(row) {
     `Hi - here are your tickets for ${showName}. Do let me know if you have any questions, but otherwise please check all the information including the date to make sure everything is correct and please keep them somewhere safe on your phone so that the bar code can be scanned on arrival.`,
     "",
     "Please do shout if you have any questions, but otherwise, have a brilliant time!",
-    "",
-    "Thanks",
-    "",
-    "Annabelle",
   ].join("\n");
   return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
