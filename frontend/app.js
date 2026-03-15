@@ -324,13 +324,16 @@ function buildMailtoHref(row) {
 }
 
 function getPdfOpenHref(row) {
-  const dragAssets = buildDragAssets(row);
-  if (dragAssets?.localUrl) return dragAssets.localUrl;
+  // Prefer the server-served preview URL — blob: URLs break in new tabs
+  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   if (row.pdf_data_url) return row.pdf_data_url;
   return "";
 }
 
 function getPdfDragHref(row) {
+  // Prefer server download URL — blob: URLs give 0KB in email clients
+  if (row.pdf_download_url) return toAbsoluteUrl(row.pdf_download_url);
+  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   const dragAssets = buildDragAssets(row);
   if (dragAssets?.localUrl) return dragAssets.localUrl;
   if (row.pdf_data_url) return row.pdf_data_url;
@@ -390,27 +393,40 @@ function clearDragAssetCache() {
   dragAssetCache.clear();
 }
 
+function isMacOS() {
+  return /Mac/i.test(navigator.platform || navigator.userAgent || "");
+}
+
 function wireDragPdf(linkEl, row) {
   const safari = isSafariBrowser();
+  const mac = isMacOS();
   const fileName = row.pdf_file || "ticket.pdf";
   const dragAssets = buildDragAssets(row);
   const dragFile = dragAssets?.file || null;
+  const blobUrl = dragAssets?.localUrl || "";
   const downloadHref = getPdfDownloadHref(row);
 
-  if (!dragFile && !downloadHref) return;
+  if (!dragFile && !downloadHref && !blobUrl) return;
 
   linkEl.draggable = true;
   linkEl.setAttribute("draggable", "true");
   linkEl.style.webkitUserDrag = "element";
 
-  if (safari) {
-    if (downloadHref) {
+  // On macOS (Safari or Chrome), Apple Mail only accepts files via native
+  // link drag. Set href to the blob URL + download attribute and let the
+  // browser handle the drag natively — do NOT add a custom dragstart handler.
+  if (mac) {
+    if (blobUrl) {
+      linkEl.href = blobUrl;
+      linkEl.download = fileName;
+    } else if (downloadHref) {
       linkEl.href = downloadHref;
       linkEl.download = fileName;
     }
     return;
   }
 
+  // Non-macOS: use custom dragstart for Windows/Linux drop targets
   linkEl.addEventListener("dragstart", (event) => {
     const dt = event.dataTransfer;
     if (!dt) return;
