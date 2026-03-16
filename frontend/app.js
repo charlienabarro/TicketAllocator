@@ -35,6 +35,7 @@ const MONTH_PATTERN =
 const state = {
   preview: [],
   showName: "",
+  detectedShowName: "",
   saveDirHandle: null,
   saveDirName: DEFAULT_SAVE_LOCATION_HINT,
   detectedPerformanceDate: "",
@@ -123,15 +124,25 @@ function detectShowName() {
   const manual = $("showNameInput").value.trim();
   if (manual) return manual;
 
+  return getDetectedShowName() || "Show";
+}
+
+function getDetectedShowName() {
   const csvName = $("allocationCsvFile").files[0]?.name || "";
   const pdfName = $("ticketsPdfFile").files[0]?.name || "";
-  return inferShowNameFromFileName(csvName) || inferShowNameFromFileName(pdfName) || "Show";
+  return inferShowNameFromFileName(csvName) || inferShowNameFromFileName(pdfName) || "";
 }
 
 function maybePrefillShowName() {
   const input = $("showNameInput");
-  if (input.value.trim()) return;
-  input.value = detectShowName();
+  const detected = getDetectedShowName();
+  const current = input.value.trim();
+  const lastDetected = state.detectedShowName || "";
+  const shouldReplace = !current || current === lastDetected || current === state.showName;
+
+  state.detectedShowName = detected;
+  if (!detected || !shouldReplace) return;
+  input.value = detected;
 }
 
 function normalizeMonth(value) {
