@@ -29,8 +29,10 @@ from allocator.ticket_bundle import (
     build_bundle_zip,
     extract_pdf_page_seat_map,
     extract_ticket_performance_metadata,
+    group_has_output_pdf,
     parse_allocation_csv,
     parse_seat_list,
+    split_groups_for_output,
 )
 from backend.schemas import (
     AllocationRowResponse,
@@ -74,9 +76,10 @@ async def preview_ticket_bundle(
     except TicketBundleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    filenames = build_output_filenames(groups)
-    preview_files = _build_preview_files(pdf_content, groups, filenames)
-    preview_id = _store_preview_files(preview_files)
+    output_groups, excluded_groups = split_groups_for_output(groups)
+    filenames = build_output_filenames(output_groups)
+    preview_files = _build_preview_files(pdf_content, output_groups, filenames)
+    preview_id = _store_preview_files(preview_files) if preview_files else None
     performance_metadata = extract_ticket_performance_metadata(pdf_content)
     missing_unique = {seat for group in groups for seat in group.missing_seats}
     matched_unique = {seat for group in groups for seat in group.seat_labels if seat in seat_map}
@@ -86,26 +89,28 @@ async def preview_ticket_bundle(
             {
                 "email": group.email,
                 "pdf_file": filename,
-                "pdf_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}",
-                "pdf_download_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}?download=1",
+                "pdf_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}" if preview_id else "",
+                "pdf_download_url": (
+                    f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}?download=1" if preview_id else ""
+                ),
                 "pdf_data_url": f"data:application/pdf;base64,{base64.b64encode(preview_files[filename]).decode('ascii')}",
             }
-            for group, filename in zip(groups, filenames)
+            for group, filename in zip(output_groups, filenames)
         ],
         "failures": [
             {
                 "booking_reference": group.booking_reference,
                 "email": group.email,
                 "missing_seats": group.missing_seats,
+                "issue": _describe_group_output_issue(group),
             }
-            for group in groups
-            if group.missing_seats
+            for group in excluded_groups
         ],
         "stats": {
             "requested_seat_count": len(expected_seats),
             "matched_seat_count": len(matched_unique),
             "missing_seat_count": len(missing_unique),
-            "output_pdf_count": len(groups),
+            "output_pdf_count": len(output_groups),
         },
         "performance_metadata": performance_metadata,
     }
@@ -523,6 +528,8 @@ def _expected_seat_labels(allocation_rows: list[dict[str, str]]) -> set[str]:
 def _build_preview_files(pdf_content: bytes, groups, filenames: list[str]) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     for group, name in zip(groups, filenames):
+        if not group_has_output_pdf(group):
+            continue
         files[name] = build_group_pdf(pdf_content, group)
     return files
 
@@ -536,6 +543,14 @@ def _store_preview_files(files: dict[str, bytes]) -> str:
         del preview_download_cache[oldest_key]
 
     return preview_id
+
+
+def _describe_group_output_issue(group) -> str:
+    if group.missing_seats:
+        return f"No ticket found for: {', '.join(group.missing_seats)}"
+    if not group.page_indexes:
+        return "No matching ticket pages were found for this booking."
+    return "This booking could not produce a PDF."
 
 
 async def _read_allocation_rows(upload: UploadFile) -> list[dict[str, str]]:

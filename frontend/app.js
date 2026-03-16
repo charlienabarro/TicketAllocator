@@ -319,8 +319,7 @@ function buildMailtoHref(row) {
 }
 
 function getPdfOpenHref(row) {
-  const dragAssets = buildDragAssets(row);
-  if (dragAssets?.localUrl) return dragAssets.localUrl;
+  if (row.pdf_url) return toAbsoluteUrl(row.pdf_url);
   if (row.pdf_data_url) return row.pdf_data_url;
   return "";
 }
@@ -530,7 +529,7 @@ function renderFailures(failures) {
   const tbody = $("previewFailureTable").querySelector("tbody");
 
   summary.textContent = failures.length
-    ? `${failures.length} booking(s) have missing seats and may produce incomplete bundles.`
+    ? `${failures.length} booking(s) could not be matched and will not produce PDFs.`
     : "";
 
   tbody.innerHTML = "";
@@ -546,7 +545,8 @@ function renderFailures(failures) {
     const bookingTd = document.createElement("td");
     bookingTd.textContent = failure.booking_reference || "";
     const seatsTd = document.createElement("td");
-    seatsTd.textContent = (failure.missing_seats || []).join(", ");
+    const missingSeats = (failure.missing_seats || []).join(", ");
+    seatsTd.textContent = missingSeats || failure.issue || "No matching ticket pages were found.";
     tr.appendChild(emailTd);
     tr.appendChild(bookingTd);
     tr.appendChild(seatsTd);

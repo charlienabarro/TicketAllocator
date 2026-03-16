@@ -11,6 +11,7 @@ from allocator.ticket_bundle import (
     build_output_filenames,
     build_booking_groups,
     extract_ticket_performance_metadata,
+    split_groups_for_output,
     output_pdf_filename,
     parse_allocation_csv,
     parse_seat_list,
@@ -275,6 +276,23 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(groups[0].missing_seats, [])
         self.assertEqual(output_pdf_filename(groups[0]), "Jane_tickets.pdf")
 
+    def test_build_groups_maps_kx_platform_seat_values(self) -> None:
+        rows = [
+            {
+                "booking_reference": "B001",
+                "customer_name": "Jane",
+                "email": "jane@example.com",
+                "seats_raw": "Platform1 -F-8",
+            }
+        ]
+        seat_to_page = {"F8": 0}
+        groups = build_booking_groups(rows, seat_to_page)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].seat_labels, ["F8"])
+        self.assertEqual(groups[0].page_indexes, [0])
+        self.assertEqual(groups[0].missing_seats, [])
+
     def test_groups_by_email_when_booking_ref_missing(self) -> None:
         rows = [
             {
@@ -335,6 +353,34 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0].seat_labels, ["C4", "C5"])
         self.assertEqual(groups[0].page_indexes, [0, 1])
+
+    def test_split_groups_for_output_excludes_incomplete_groups(self) -> None:
+        rows = [
+            {
+                "booking_reference": "B100",
+                "customer_name": "Rachel",
+                "email": "rachel@example.com",
+                "seats_raw": "C4",
+            },
+            {
+                "booking_reference": "B101",
+                "customer_name": "Adam",
+                "email": "adam@example.com",
+                "seats_raw": "C5",
+            },
+            {
+                "booking_reference": "B102",
+                "customer_name": "Sue",
+                "email": "sue@example.com",
+                "seats_raw": "",
+            },
+        ]
+        seat_to_page = {"C4": 0}
+        groups = build_booking_groups(rows, seat_to_page)
+        complete, excluded = split_groups_for_output(groups)
+
+        self.assertEqual([g.email for g in complete], ["rachel@example.com"])
+        self.assertEqual([g.email for g in excluded], ["adam@example.com", "sue@example.com"])
 
     def test_groups_ignore_notes_like_booking_refs(self) -> None:
         rows = [

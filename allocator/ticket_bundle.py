@@ -116,6 +116,25 @@ class BookingTicketGroup:
     missing_seats: list[str]
 
 
+def group_has_output_pdf(group: BookingTicketGroup) -> bool:
+    return bool(group.page_indexes) and not group.missing_seats
+
+
+def split_groups_for_output(
+    groups: list[BookingTicketGroup],
+) -> tuple[list[BookingTicketGroup], list[BookingTicketGroup]]:
+    complete: list[BookingTicketGroup] = []
+    excluded: list[BookingTicketGroup] = []
+
+    for group in groups:
+        if group_has_output_pdf(group):
+            complete.append(group)
+        else:
+            excluded.append(group)
+
+    return complete, excluded
+
+
 class TicketBundleError(ValueError):
     pass
 
@@ -545,13 +564,14 @@ def build_booking_groups(
 
 
 def build_bundle_zip(pdf_bytes: bytes, groups: list[BookingTicketGroup]) -> bytes:
+    complete_groups, _ = split_groups_for_output(groups)
     output = BytesIO()
 
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        manifest_csv = _build_manifest_csv(groups)
+        manifest_csv = _build_manifest_csv(complete_groups)
         archive.writestr("manifest.csv", manifest_csv)
 
-        for group in groups:
+        for group in complete_groups:
             pdf_blob = build_group_pdf(pdf_bytes, group)
             filename = output_pdf_filename(group)
             archive.writestr(filename, pdf_blob)
