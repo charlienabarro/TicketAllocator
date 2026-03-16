@@ -73,6 +73,14 @@ class TicketBundleTests(unittest.TestCase):
         parsed = _extract_seat_tokens(text)
         self.assertEqual(parsed, ["B1"])
 
+    def test_extract_seat_tokens_from_kx_platform_format(self) -> None:
+        text = (
+            "Order TF40DJ6 Platform1 -F-8 Starlight Express Friday, 27 March, 2026 7:00 pm "
+            "Troubadour Wembley Park Theatre SECTION Platform1 ROW F SEAT 8"
+        )
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["F8"])
+
     def test_extract_performance_date_candidates_prefers_month_day(self) -> None:
         parsed = _extract_performance_date_candidates("Paddington Sat 15 March 2026 7:30pm")
         self.assertEqual(parsed, ["Mar 15"])
@@ -128,6 +136,10 @@ class TicketBundleTests(unittest.TestCase):
     def test_normalize_seat_labels(self) -> None:
         parsed = _normalize_seat_labels({"j11", "12 K", "bad"})
         self.assertEqual(parsed, {"J11", "K12"})
+
+    def test_normalize_seat_labels_handles_kx_platform_prefix(self) -> None:
+        parsed = _normalize_seat_labels({"Platform1 -F-8", "Platform1 -F-17"})
+        self.assertEqual(parsed, {"F8", "F17"})
 
     def test_parse_allocation_alias_columns(self) -> None:
         csv_content = """Order Number,Booker Name,E-mail,Allocated Seats\nB100,Jane,jane@example.com,C1 to C3\n"""

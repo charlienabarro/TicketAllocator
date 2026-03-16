@@ -13,7 +13,9 @@ ROW_SEAT_LABEL_RE = re.compile(r"\bROW\b[\s:.-]*([A-Za-z]{1,3})[\s|/,-]*\bSEAT\b
 SEAT_ROW_LABEL_RE = re.compile(r"\bSEAT\b[\s:.-]*(\d{1,3})[\s|/,-]*\bROW\b[\s:.-]*([A-Za-z]{1,3})\b", re.IGNORECASE)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 EMAIL_EXTRACT_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-SECTION_HINT_PATTERN = r"(?:STALLS|CIRCLE|DRESS|GRAND|UPPER|LOWER|BALCONY|MEZZANINE|BOX|PIT|GALLERY|SECTION)"
+SECTION_HINT_PATTERN = (
+    r"(?:STALLS|CIRCLE|DRESS|GRAND|UPPER|LOWER|BALCONY|MEZZANINE|BOX|PIT|GALLERY|SECTION|PLATFORM\d*)"
+)
 SECTION_HINT_RE = re.compile(
     rf"\b{SECTION_HINT_PATTERN}\b",
     re.IGNORECASE,
@@ -833,6 +835,10 @@ def _normalize_seat_label(value: str) -> str | None:
     clean = value.strip().upper()
     if not clean:
         return None
+
+    parsed_seats = parse_seat_list(clean)
+    if parsed_seats:
+        return parsed_seats[0]
 
     forward_match = re.fullmatch(r"([A-Z]{1,3})\s*[- ]?\s*(\d{1,3})", clean)
     if forward_match:
