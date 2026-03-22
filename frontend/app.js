@@ -785,6 +785,42 @@ function emailFileName(pdfFileName) {
   return pdfFileName.replace(/\.pdf$/i, "_email.inetloc");
 }
 
+async function writeFileHandleContents(fileHandle, contents, type = "") {
+  const writable = await fileHandle.createWritable();
+  try {
+    await writable.write(type ? new Blob([contents], { type }) : contents);
+  } finally {
+    await writable.close();
+  }
+}
+
+async function getFileHandleModifiedAt(fileHandle) {
+  const file = await fileHandle.getFile();
+  return file.lastModified;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function ensureFileHandleModifiedAfter(fileHandle, contents, previousModifiedAt, type = "") {
+  let currentModifiedAt = await getFileHandleModifiedAt(fileHandle);
+  if (previousModifiedAt == null || currentModifiedAt > previousModifiedAt) {
+    return currentModifiedAt;
+  }
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await delay(25 * (attempt + 1));
+    await writeFileHandleContents(fileHandle, contents, type);
+    currentModifiedAt = await getFileHandleModifiedAt(fileHandle);
+    if (currentModifiedAt > previousModifiedAt) {
+      return currentModifiedAt;
+    }
+  }
+
+  return currentModifiedAt;
+}
+
 async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
   if (!state.saveDirHandle) return 0;
   const hasPermission = await ensureDirectoryWritePermission(state.saveDirHandle);
@@ -794,34 +830,26 @@ async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
 
   const outputDirHandle = await state.saveDirHandle.getDirectoryHandle(folderName, { create: true });
   let writtenCount = 0;
+  let previousPdfModifiedAt = null;
 
-  for (const row of previewRows) {
+  for (const row of [...previewRows].reverse()) {
     const fileName = row?.pdf_file || "";
     const blob = toDataUrlPdfBlob(row?.pdf_data_url || "");
     if (!fileName || !blob) continue;
-
-    // Write PDF
-    const fileHandle = await outputDirHandle.getFileHandle(fileName, { create: true });
-    const writable = await fileHandle.createWritable();
-    try {
-      await writable.write(blob);
-      writtenCount += 1;
-    } finally {
-      await writable.close();
-    }
 
     // Write email compose shortcut
     const emailContent = buildEmailFileContent(row);
     if (emailContent) {
       const emailName = emailFileName(fileName);
       const emailHandle = await outputDirHandle.getFileHandle(emailName, { create: true });
-      const emailWritable = await emailHandle.createWritable();
-      try {
-        await emailWritable.write(new Blob([emailContent], { type: "application/xml" }));
-      } finally {
-        await emailWritable.close();
-      }
+      await writeFileHandleContents(emailHandle, emailContent, "application/xml");
     }
+
+    // Write PDF last so Finder's newest-first sorting mirrors the Numbers-file order.
+    const fileHandle = await outputDirHandle.getFileHandle(fileName, { create: true });
+    await writeFileHandleContents(fileHandle, blob);
+    previousPdfModifiedAt = await ensureFileHandleModifiedAfter(fileHandle, blob, previousPdfModifiedAt);
+    writtenCount += 1;
   }
 
   return writtenCount;
@@ -893,8 +921,11 @@ async function buildClientZip(previewRows, folderPrefix) {
 
 async function _collectZipEntries(previewRows, folderPrefix) {
   const entries = [];
+  const baseModifiedAt = _buildZipBaseModifiedAt();
 
-  for (const row of previewRows) {
+  for (const [rowIndex, row] of previewRows.entries()) {
+    const pdfModifiedAt = _buildZipEntryModifiedAt(baseModifiedAt, rowIndex, 0);
+    const emailModifiedAt = _buildZipEntryModifiedAt(baseModifiedAt, rowIndex, 1);
     const pdfName = row?.pdf_file || "";
     if (pdfName && row?.pdf_data_url) {
       const dataUrl = row.pdf_data_url;
@@ -903,7 +934,7 @@ async function _collectZipEntries(previewRows, folderPrefix) {
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        entries.push({ name: `${folderPrefix}/${pdfName}`, data: bytes });
+        entries.push({ name: `${folderPrefix}/${pdfName}`, data: bytes, modifiedAt: pdfModifiedAt });
       }
     }
 
@@ -911,11 +942,49 @@ async function _collectZipEntries(previewRows, folderPrefix) {
     if (emailContent && pdfName) {
       const emailName = emailFileName(pdfName);
       const emailBytes = new TextEncoder().encode(emailContent);
-      entries.push({ name: `${folderPrefix}/${emailName}`, data: emailBytes });
+      entries.push({ name: `${folderPrefix}/${emailName}`, data: emailBytes, modifiedAt: emailModifiedAt });
     }
   }
 
   return entries;
+}
+
+function _buildZipBaseModifiedAt() {
+  const now = new Date();
+  now.setMilliseconds(0);
+  const evenSecond = now.getSeconds() - (now.getSeconds() % 2);
+  now.setSeconds(evenSecond);
+  return now;
+}
+
+function _buildZipEntryModifiedAt(baseModifiedAt, rowIndex, entryOffset) {
+  const modifiedAt = new Date(baseModifiedAt.getTime());
+  modifiedAt.setSeconds(modifiedAt.getSeconds() - (rowIndex * 4) - (entryOffset * 2));
+  return modifiedAt;
+}
+
+function _encodeZipDosTimestamp(value) {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Could not encode ZIP modified time.");
+  }
+
+  const clampedYear = Math.min(Math.max(date.getFullYear(), 1980), 2107);
+  if (clampedYear !== date.getFullYear()) {
+    date.setFullYear(clampedYear);
+  }
+
+  const seconds = Math.floor(date.getSeconds() / 2);
+  const dosTime =
+    (date.getHours() << 11) |
+    (date.getMinutes() << 5) |
+    seconds;
+  const dosDate =
+    ((date.getFullYear() - 1980) << 9) |
+    ((date.getMonth() + 1) << 5) |
+    date.getDate();
+
+  return { time: dosTime, date: dosDate };
 }
 
 function _buildZipFromEntries(entries) {
@@ -929,6 +998,7 @@ function _buildZipFromEntries(entries) {
     const data = entry.data;
     const crc = crc32(data);
     const size = data.length;
+    const modifiedAt = _encodeZipDosTimestamp(entry.modifiedAt || new Date());
 
     // Local file header (30 bytes + name + data)
     const local = new ArrayBuffer(30 + nameBytes.length);
@@ -937,8 +1007,8 @@ function _buildZipFromEntries(entries) {
     lv.setUint16(4, 20, true);           // version needed
     lv.setUint16(6, 0, true);            // flags
     lv.setUint16(8, 0, true);            // compression (store)
-    lv.setUint16(10, 0, true);           // mod time
-    lv.setUint16(12, 0, true);           // mod date
+    lv.setUint16(10, modifiedAt.time, true); // mod time
+    lv.setUint16(12, modifiedAt.date, true); // mod date
     lv.setUint32(14, crc, true);         // crc32
     lv.setUint32(18, size, true);        // compressed size
     lv.setUint32(22, size, true);        // uncompressed size
@@ -957,8 +1027,8 @@ function _buildZipFromEntries(entries) {
     cv.setUint16(6, 20, true);            // version needed
     cv.setUint16(8, 0, true);             // flags
     cv.setUint16(10, 0, true);            // compression
-    cv.setUint16(12, 0, true);            // mod time
-    cv.setUint16(14, 0, true);            // mod date
+    cv.setUint16(12, modifiedAt.time, true); // mod time
+    cv.setUint16(14, modifiedAt.date, true); // mod date
     cv.setUint32(16, crc, true);          // crc32
     cv.setUint32(20, size, true);         // compressed size
     cv.setUint32(24, size, true);         // uncompressed size

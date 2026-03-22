@@ -4,6 +4,7 @@ import csv
 import re
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from io import BytesIO, StringIO
 
 
@@ -566,18 +567,45 @@ def build_booking_groups(
 def build_bundle_zip(pdf_bytes: bytes, groups: list[BookingTicketGroup]) -> bytes:
     complete_groups, _ = split_groups_for_output(groups)
     output = BytesIO()
+    base_modified_at = _build_bundle_zip_base_modified_at()
 
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         manifest_csv = _build_manifest_csv(complete_groups)
-        archive.writestr("manifest.csv", manifest_csv)
+        manifest_info = zipfile.ZipInfo("manifest.csv", date_time=_zip_info_datetime(base_modified_at, len(complete_groups)))
+        manifest_info.compress_type = zipfile.ZIP_DEFLATED
+        archive.writestr(manifest_info, manifest_csv)
 
-        for group in complete_groups:
+        for index, group in enumerate(complete_groups):
             pdf_blob = build_group_pdf(pdf_bytes, group)
             filename = output_pdf_filename(group)
-            archive.writestr(filename, pdf_blob)
+            file_info = zipfile.ZipInfo(filename, date_time=_zip_info_datetime(base_modified_at, index))
+            file_info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(file_info, pdf_blob)
 
     output.seek(0)
     return output.getvalue()
+
+
+def _build_bundle_zip_base_modified_at() -> datetime:
+    now = datetime.now().replace(microsecond=0)
+    even_second = now.second - (now.second % 2)
+    return now.replace(second=even_second)
+
+
+def _zip_info_datetime(base_modified_at: datetime, index: int) -> tuple[int, int, int, int, int, int]:
+    modified_at = base_modified_at - timedelta(seconds=index * 4)
+    if modified_at.year < 1980:
+        modified_at = modified_at.replace(year=1980, month=1, day=1, hour=0, minute=0, second=0)
+    even_second = modified_at.second - (modified_at.second % 2)
+    modified_at = modified_at.replace(second=even_second)
+    return (
+        modified_at.year,
+        modified_at.month,
+        modified_at.day,
+        modified_at.hour,
+        modified_at.minute,
+        modified_at.second,
+    )
 
 
 def build_group_pdf(pdf_bytes: bytes, group: BookingTicketGroup) -> bytes:

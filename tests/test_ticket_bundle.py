@@ -1,3 +1,5 @@
+from io import BytesIO
+import zipfile
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +10,7 @@ from allocator.ticket_bundle import (
     _extract_seat_tokens,
     _extract_seat_tokens_from_pdf_content_data,
     _normalize_seat_labels,
+    build_bundle_zip,
     build_output_filenames,
     build_booking_groups,
     extract_ticket_performance_metadata,
@@ -258,6 +261,54 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[1]["email"], "adam@example.com")
         self.assertEqual(rows[1]["seats_raw"], "")
+
+    def test_build_bundle_zip_sets_non_zero_descending_timestamps(self) -> None:
+        groups = [
+            BookingTicketGroup(
+                booking_reference="B100",
+                customer_name="Alice Example",
+                email="alice@example.com",
+                seat_labels=["A1"],
+                page_indexes=[0],
+                missing_seats=[],
+            ),
+            BookingTicketGroup(
+                booking_reference="B101",
+                customer_name="Bob Example",
+                email="bob@example.com",
+                seat_labels=["A2"],
+                page_indexes=[1],
+                missing_seats=[],
+            ),
+            BookingTicketGroup(
+                booking_reference="B102",
+                customer_name="Cara Example",
+                email="cara@example.com",
+                seat_labels=["A3"],
+                page_indexes=[2],
+                missing_seats=[],
+            ),
+        ]
+
+        with patch("allocator.ticket_bundle.build_group_pdf", side_effect=[b"pdf-one", b"pdf-two", b"pdf-three"]):
+            zip_blob = build_bundle_zip(b"%PDF-pretend", groups)
+
+        with zipfile.ZipFile(BytesIO(zip_blob)) as archive:
+            names = archive.namelist()
+            self.assertEqual(names[0], "manifest.csv")
+            pdf_infos = [archive.getinfo(output_pdf_filename(group)) for group in groups]
+
+        for info in pdf_infos:
+            self.assertGreaterEqual(info.date_time[0], 1980)
+            self.assertNotEqual(info.date_time, (1980, 1, 1, 0, 0, 0))
+
+        self.assertGreater(pdf_infos[0].date_time, pdf_infos[1].date_time)
+        self.assertGreater(pdf_infos[1].date_time, pdf_infos[2].date_time)
+
+        with zipfile.ZipFile(BytesIO(zip_blob)) as archive:
+            manifest_info = archive.getinfo("manifest.csv")
+
+        self.assertLess(manifest_info.date_time, pdf_infos[-1].date_time)
 
     def test_build_groups_maps_pages(self) -> None:
         rows = [
