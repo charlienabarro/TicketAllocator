@@ -30,6 +30,9 @@ ROW_SEAT_SECTION_RE = re.compile(
 COMPACT_SEAT_AFTER_SECTION_RE = re.compile(
     rf"(?i)\b{SECTION_HINT_PATTERN}\s+([A-Za-z]{{1,3}})\s*(\d{{1,3}})(?=[A-Za-z]|$)"
 )
+PACKED_SEAT_AFTER_SECTION_RE = re.compile(
+    rf"(?i)(?<![A-Za-z]){SECTION_HINT_PATTERN}\s*([A-Za-z]{{1,3}})\s*(\d{{1,3}})\b"
+)
 SEAT_BEFORE_ORDER_RE = re.compile(
     r"(?i)\b([A-Za-z]{1,3})\s*[- ]?\s*(\d{1,3})(?=\s*ORDER(?:\b|[A-Z]))"
 )
@@ -704,6 +707,10 @@ def _extract_seat_tokens(text: str) -> list[str]:
         if token:
             out.append(token)
     for m in COMPACT_SEAT_AFTER_SECTION_RE.finditer(text):
+        token = _seat_token(m.group(1), m.group(2))
+        if token:
+            out.append(token)
+    for m in PACKED_SEAT_AFTER_SECTION_RE.finditer(text):
         token = _seat_token(m.group(1), m.group(2))
         if token:
             out.append(token)

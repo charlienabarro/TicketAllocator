@@ -91,6 +91,25 @@ class TicketBundleTests(unittest.TestCase):
         parsed = _extract_seat_tokens(text)
         self.assertEqual(parsed, ["K37"])
 
+    def test_extract_seat_tokens_from_old_vic_stage_stalls_packed_format(self) -> None:
+        text = (
+            "One Flew Over the Cuckoo's Nest"
+            "Thursday 09 April 20267:30 PM"
+            "4446166 6169165"
+            "Stage StallsK37 55.00"
+            "Group20+"
+        )
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["K37"])
+
+    def test_extract_seat_tokens_from_old_vic_stage_stalls_packed_after_ticket_number(self) -> None:
+        text = (
+            "Bird & Bird is the proud Production Sponsor"
+            "of One Flew Over the Cuckoo’s Nest4446166 6169165Stage StallsK37 55.00Group20+"
+        )
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["K37"])
+
     def test_extract_seat_tokens_from_old_vic_stalls_format(self) -> None:
         text = (
             "One Flew Over the Cuckoo's Nest\n"
@@ -101,6 +120,25 @@ class TicketBundleTests(unittest.TestCase):
             "J12\n"
             "55.00\n"
             "Group20+\n"
+        )
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["J12"])
+
+    def test_extract_seat_tokens_from_old_vic_stalls_packed_format(self) -> None:
+        text = (
+            "One Flew Over the Cuckoo's Nest"
+            "Thursday 09 April 20267:30 PM"
+            "4446194 6169165"
+            "StallsJ12 55.00"
+            "Group20+"
+        )
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["J12"])
+
+    def test_extract_seat_tokens_from_old_vic_stalls_packed_after_ticket_number(self) -> None:
+        text = (
+            "Bird & Bird is the proud Production Sponsor"
+            "of One Flew Over the Cuckoo’s Nest4446194 6169165StallsJ12 55.00Group20+"
         )
         parsed = _extract_seat_tokens(text)
         self.assertEqual(parsed, ["J12"])
