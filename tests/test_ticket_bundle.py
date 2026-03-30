@@ -77,6 +77,34 @@ class TicketBundleTests(unittest.TestCase):
         parsed = _extract_seat_tokens(text)
         self.assertEqual(parsed, ["B1"])
 
+    def test_extract_seat_tokens_from_old_vic_stage_stalls_format(self) -> None:
+        text = (
+            "One Flew Over the Cuckoo's Nest\n"
+            "Thursday 09 April 2026 7:30 PM\n"
+            "4446166\n"
+            "6169165\n"
+            "Stage Stalls\n"
+            "K37\n"
+            "55.00\n"
+            "Group20+\n"
+        )
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["K37"])
+
+    def test_extract_seat_tokens_from_old_vic_stalls_format(self) -> None:
+        text = (
+            "One Flew Over the Cuckoo's Nest\n"
+            "Thursday 09 April 2026 7:30 PM\n"
+            "4446194\n"
+            "6169165\n"
+            "Stalls\n"
+            "J12\n"
+            "55.00\n"
+            "Group20+\n"
+        )
+        parsed = _extract_seat_tokens(text)
+        self.assertEqual(parsed, ["J12"])
+
     def test_extract_seat_tokens_from_kx_platform_format(self) -> None:
         text = (
             "Order TF40DJ6 Platform1 -F-8 Starlight Express Friday, 27 March, 2026 7:00 pm "
@@ -92,6 +120,11 @@ class TicketBundleTests(unittest.TestCase):
     def test_extract_performance_time_candidates_formats_24_hour_time(self) -> None:
         parsed = _extract_performance_time_candidates("Paddington Sat 15 March 2026 19:30")
         self.assertEqual(parsed, ["7.30"])
+
+    def test_extract_performance_candidates_from_old_vic_format(self) -> None:
+        text = "One Flew Over the Cuckoo's Nest Thursday 09 April 2026 7:30 PM Stage Stalls K37"
+        self.assertEqual(_extract_performance_date_candidates(text), ["Apr 9"])
+        self.assertEqual(_extract_performance_time_candidates(text), ["7.30"])
 
     def test_extract_ticket_performance_metadata_from_pdf_text(self) -> None:
         class FakePage:

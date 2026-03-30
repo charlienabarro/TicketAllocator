@@ -15,7 +15,7 @@ SEAT_ROW_LABEL_RE = re.compile(r"\bSEAT\b[\s:.-]*(\d{1,3})[\s|/,-]*\bROW\b[\s:.-
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 EMAIL_EXTRACT_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 SECTION_HINT_PATTERN = (
-    r"(?:STALLS|CIRCLE|DRESS|GRAND|UPPER|LOWER|BALCONY|MEZZANINE|BOX|PIT|GALLERY|SECTION|PLATFORM\d*)"
+    r"(?:STAGE|STALLS|CIRCLE|DRESS|GRAND|UPPER|LOWER|BALCONY|MEZZANINE|BOX|PIT|GALLERY|SECTION|PLATFORM\d*)"
 )
 SECTION_HINT_RE = re.compile(
     rf"\b{SECTION_HINT_PATTERN}\b",
