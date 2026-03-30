@@ -398,6 +398,22 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(groups[0].missing_seats, [])
         self.assertEqual(output_pdf_filename(groups[0]), "Jane_tickets.pdf")
 
+    def test_build_groups_preserves_seat_order_when_source_pages_are_reversed(self) -> None:
+        rows = [
+            {
+                "booking_reference": "B001",
+                "customer_name": "Jane",
+                "email": "jane@example.com",
+                "seats_raw": "L1-L4",
+            }
+        ]
+        seat_to_page = {"L1": 3, "L2": 2, "L3": 1, "L4": 0}
+        groups = build_booking_groups(rows, seat_to_page)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].seat_labels, ["L1", "L2", "L3", "L4"])
+        self.assertEqual(groups[0].page_indexes, [3, 2, 1, 0])
+
     def test_build_groups_maps_kx_platform_seat_values(self) -> None:
         rows = [
             {

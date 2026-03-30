@@ -551,7 +551,8 @@ def build_booking_groups(
                     if seat not in missing:
                         missing.append(seat)
                     continue
-                pages.append(page)
+                if page not in pages:
+                    pages.append(page)
 
         groups.append(
             BookingTicketGroup(
@@ -559,7 +560,7 @@ def build_booking_groups(
                 customer_name=customer_name,
                 email=email,
                 seat_labels=seat_labels,
-                page_indexes=sorted(set(pages)),
+                page_indexes=pages,
                 missing_seats=missing,
             )
         )
