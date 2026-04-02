@@ -1,19 +1,30 @@
 from io import BytesIO
+import json
 import zipfile
 import unittest
 from unittest.mock import patch
 
 from allocator.ticket_bundle import (
+    BookingTicketGroup,
+    ParsedTicketPage,
+    ParsedTicketPageResult,
+    _extract_printed_barcode_value_from_page,
+    _extract_show_name_candidates,
+    _extract_venue_candidates,
     _extract_performance_date_candidates,
     _extract_performance_time_candidates,
     _extract_expected_seats_from_text,
     _extract_seat_tokens,
     _extract_seat_tokens_from_pdf_content_data,
     _normalize_seat_labels,
+    TicketBundleError,
     build_bundle_zip,
     build_output_filenames,
     build_booking_groups,
+    build_pkpass_for_ticket,
     extract_ticket_performance_metadata,
+    parse_ticket_pdf_page_results,
+    parse_ticket_pdf_pages,
     split_groups_for_output,
     output_pdf_filename,
     parse_allocation_csv,
@@ -164,6 +175,49 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(_extract_performance_date_candidates(text), ["Apr 9"])
         self.assertEqual(_extract_performance_time_candidates(text), ["7.30"])
 
+    def test_extract_show_name_candidates_from_old_vic_packed_text(self) -> None:
+        text = (
+            "Event Donate to us Order number Ticket number "
+            "One Flew Over the Cuckoo's NestThursday 09 April 20267:30 PM "
+            "Bird & Bird is the proud Production Sponsor"
+        )
+        self.assertEqual(_extract_show_name_candidates(text)[0], "One Flew Over the Cuckoo's Nest")
+
+    def test_extract_show_name_candidates_known_ticket_formats(self) -> None:
+        self.assertEqual(
+            _extract_show_name_candidates("ABBA Voyage\nFRI 10 APR 2026\nStart Time 7:45 PM\nABBA Arena\nGroups Ticket")[0],
+            "ABBA Voyage",
+        )
+        self.assertEqual(
+            _extract_show_name_candidates("Mon 16 Mar 2026 19:00Savoy Theatre, LondonNabarroOrder 37638599\nDress Circle B1Paddington The Musical")[0],
+            "Paddington The Musical",
+        )
+        self.assertEqual(
+            _extract_show_name_candidates("Thursday, 19 March, 2026 2:30 pmHamiltonHamilton\nOrder ID: TFFLMR4")[0],
+            "Hamilton",
+        )
+
+    def test_extract_venue_candidates_prefers_known_old_vic_hint_over_disclaimer(self) -> None:
+        text = (
+            "oldvictheatre.com Registered Charity No. 1072590 "
+            "Tickets cannot be sold on for commercial gain by any outlet other than The Old Vic "
+            "or one of its authorised agents."
+        )
+        self.assertEqual(_extract_venue_candidates(text), ["The Old Vic"])
+
+    def test_extract_venue_candidates_known_theatre_hints(self) -> None:
+        self.assertEqual(_extract_venue_candidates("ABBA Arena, Pudding Mill Lane"), ["ABBA Arena"])
+        self.assertEqual(_extract_venue_candidates("Criterion Theatre, 218-223 Piccadilly"), ["Criterion Theatre"])
+        self.assertEqual(_extract_venue_candidates("Rosebery Avenue, London EC1R 4TN"), ["Sadler's Wells Theatre"])
+        self.assertEqual(_extract_venue_candidates("boxoffice@sohoplace.org"), ["@sohoplace"])
+
+    def test_extract_performance_time_candidates_ignores_prices_and_contact_hours(self) -> None:
+        titanique_text = "Thu 19 March 2026 @ 19:30 Ticket commission £1.25 restoration levy £1.50"
+        self.assertEqual(_extract_performance_time_candidates(titanique_text), ["7.30"])
+
+        sinatra_text = "Wednesday, 19 August, 2026 7:30 pm contact 020 7206 1174 Mon-Fri 9am -5.30pm"
+        self.assertEqual(_extract_performance_time_candidates(sinatra_text), ["7.30"])
+
     def test_extract_ticket_performance_metadata_from_pdf_text(self) -> None:
         class FakePage:
             def extract_text(self) -> str:
@@ -197,6 +251,393 @@ class TicketBundleTests(unittest.TestCase):
             parsed,
             {"performance_date": "Mar 15", "performance_time": None, "confidence": False},
         )
+
+    def test_parse_ticket_pdf_pages_extracts_structured_page_fields(self) -> None:
+        page_text = "Paddington The Musical\nSat 15 March 2026\n7:30pm\nSavoy Theatre\nROW D\nSEAT 30\n"
+
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return page_text
+                if mode == "words":
+                    return []
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        class FakeDocument:
+            page_count = 1
+
+            def load_page(self, index: int):
+                self.last_index = index
+                return FakePage()
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch("allocator.ticket_bundle._decode_qr_payload_for_page", return_value="decoded-qr-payload"):
+                parsed = parse_ticket_pdf_pages(b"%PDF-pretend", expected_seats={"D30"})
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(
+            parsed[0],
+            ParsedTicketPage(
+                page_index=0,
+                show_name="Paddington The Musical",
+                performance_date="Mar 15",
+                performance_time="7.30",
+                venue_name="Savoy Theatre",
+                row="D",
+                seat="30",
+                seat_label="D30",
+                qr_payload="decoded-qr-payload",
+            ),
+        )
+
+    def test_parse_ticket_pdf_page_results_keeps_pdf_matching_when_wallet_decode_fails(self) -> None:
+        page_text = "Paddington The Musical\nSat 15 March 2026\n7:30pm\nSavoy Theatre\nROW D\nSEAT 30\n"
+
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return page_text
+                if mode == "words":
+                    return []
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        class FakeDocument:
+            page_count = 1
+
+            def load_page(self, index: int):
+                self.last_index = index
+                return FakePage()
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch(
+                "allocator.ticket_bundle._decode_qr_payload_for_page",
+                side_effect=TicketBundleError("Could not decode a QR code from one or more ticket pages."),
+            ):
+                parsed = parse_ticket_pdf_page_results(b"%PDF-pretend", expected_seats={"D30"})
+
+        self.assertEqual(
+            parsed,
+            [
+                ParsedTicketPageResult(
+                    page_index=0,
+                    show_name="Paddington The Musical",
+                    performance_date="Mar 15",
+                    performance_time="7.30",
+                    venue_name="Savoy Theatre",
+                    row="D",
+                    seat="30",
+                    seat_label="D30",
+                    qr_payload=None,
+                    wallet_error="Could not decode a QR code from one or more ticket pages.",
+                )
+            ],
+        )
+
+    def test_parse_ticket_pdf_page_results_extracts_abba_voyage_seat_from_positioned_words(self) -> None:
+        page_text = (
+            "ABBA Voyage\n"
+            "FRI 10 APR 2026\n"
+            "Start Time 7:45 PM\n"
+            "ABBA Arena\n"
+            "Groups Ticket\n"
+            "via Gate A - Arena Right\n"
+            "Block K\n"
+            "SECTION\n"
+            "U16s accompanied by an adult\n"
+        )
+
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return page_text
+                if mode == "words":
+                    return [
+                        (106.0, 50.0, 143.0, 67.0, "ABBA", 0, 0, 0),
+                        (147.0, 50.0, 196.0, 67.0, "Voyage", 0, 0, 1),
+                        (118.0, 191.0, 165.0, 212.0, "Block", 6, 0, 0),
+                        (170.0, 191.0, 183.0, 212.0, "K", 6, 0, 1),
+                        (137.0, 211.0, 164.0, 218.0, "SECTION", 7, 0, 0),
+                        (96.0, 259.0, 205.0, 268.0, "U16s", 8, 0, 0),
+                        (115.0, 223.0, 126.0, 244.0, "A", 13, 0, 0),
+                        (172.0, 223.0, 182.0, 244.0, "1", 13, 0, 1),
+                    ]
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        class FakeDocument:
+            page_count = 1
+
+            def load_page(self, _index: int):
+                return FakePage()
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch(
+                "allocator.ticket_bundle._decode_qr_payload_for_page",
+                side_effect=TicketBundleError("Could not decode a QR code from one or more ticket pages."),
+            ):
+                parsed = parse_ticket_pdf_page_results(b"%PDF-pretend")
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0].seat_label, "A1")
+        self.assertEqual(parsed[0].show_name, "ABBA Voyage")
+        self.assertEqual(parsed[0].venue_name, "ABBA Arena")
+        self.assertEqual(parsed[0].performance_date, "Apr 10")
+        self.assertEqual(parsed[0].performance_time, "7.45")
+
+    def test_parse_ticket_pdf_page_results_skips_abba_dance_floor_pages_without_expected_seats(self) -> None:
+        seated_text = (
+            "ABBA Voyage\nFRI 10 APR 2026\nStart Time 7:45 PM\nABBA Arena\nGroups Ticket\n"
+            "via Gate A - Arena Right\nBlock K\nSECTION\nU16s accompanied by an adult\n"
+        )
+        dance_floor_text = (
+            "ABBA Voyage\nFRI 10 APR 2026\nStart Time 7:45 PM\nABBA Arena\nGroups Ticket\n"
+            "via Gate B\nDance Floor\nSECTION\nU16s accompanied by an adult\nGA\n"
+        )
+
+        class FakePage:
+            def __init__(self, text: str, words: list[tuple]):
+                self.text = text
+                self.words = words
+
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return self.text
+                if mode == "words":
+                    return self.words
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        pages = [
+            FakePage(
+                seated_text,
+                [
+                    (106.0, 50.0, 143.0, 67.0, "ABBA", 0, 0, 0),
+                    (147.0, 50.0, 196.0, 67.0, "Voyage", 0, 0, 1),
+                    (118.0, 191.0, 165.0, 212.0, "Block", 6, 0, 0),
+                    (170.0, 191.0, 183.0, 212.0, "K", 6, 0, 1),
+                    (137.0, 211.0, 164.0, 218.0, "SECTION", 7, 0, 0),
+                    (115.0, 223.0, 126.0, 244.0, "A", 13, 0, 0),
+                    (172.0, 223.0, 182.0, 244.0, "1", 13, 0, 1),
+                ],
+            ),
+            FakePage(
+                dance_floor_text,
+                [
+                    (106.0, 50.0, 143.0, 67.0, "ABBA", 0, 0, 0),
+                    (147.0, 50.0, 196.0, 67.0, "Voyage", 0, 0, 1),
+                    (117.0, 153.0, 185.0, 169.0, "via", 5, 0, 0),
+                    (152.0, 153.0, 185.0, 169.0, "Gate", 5, 0, 1),
+                    (101.0, 191.0, 200.0, 212.0, "Dance", 6, 0, 0),
+                    (152.0, 191.0, 200.0, 212.0, "Floor", 6, 0, 1),
+                    (165.0, 223.0, 189.0, 244.0, "GA", 13, 0, 0),
+                ],
+            ),
+        ]
+
+        class FakeDocument:
+            page_count = 2
+
+            def load_page(self, index: int):
+                return pages[index]
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch(
+                "allocator.ticket_bundle._decode_qr_payload_for_page",
+                side_effect=TicketBundleError("Could not decode a QR code from one or more ticket pages."),
+            ):
+                parsed = parse_ticket_pdf_page_results(b"%PDF-pretend")
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0].seat_label, "A1")
+
+    def test_parse_ticket_pdf_pages_extracts_old_vic_show_and_venue(self) -> None:
+        page_text = (
+            "Event\n"
+            "Donate to usOrder numberTicket numberTerms and conditions Venue and Travel info Click hereAllocation\n"
+            "£No need to print your ticket,  we will scan it from your phone\n"
+            "Join as a MemberVisit our Education Hub\n"
+            "oldvictheatre.comRegistered Charity No. 1072590Tickets cannot be sold on for commercial gain by any outlet other than The Old Vic or one of its authorised agents.\n"
+            "WATERLOOSTATIONBACKSTAGEJoin us Backstage for a pre-theatre meal or post-show drink"
+            "One Flew Over the Cuckoo's NestThursday 09 April 20267:30 PM"
+            "Royal Bank of Canada Principal Partner:Bringing you more"
+            "Bird & Bird is the proud Production Sponsorof One Flew Over the Cuckoo’s Nest"
+            "4446191 6169165StallsJ7 55.00Group20+\n"
+        )
+
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return page_text
+                if mode == "words":
+                    return []
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        class FakeDocument:
+            page_count = 1
+
+            def load_page(self, _index: int):
+                return FakePage()
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch("allocator.ticket_bundle._decode_qr_payload_for_page", return_value="decoded-qr-payload"):
+                parsed = parse_ticket_pdf_pages(b"%PDF-pretend", expected_seats={"J7"})
+
+        self.assertEqual(parsed[0].show_name, "One Flew Over the Cuckoo's Nest")
+        self.assertEqual(parsed[0].venue_name, "The Old Vic")
+
+    def test_parse_ticket_pdf_pages_extracts_devil_wears_prada_metadata(self) -> None:
+        page_text = (
+            "Wednesday, 15 April, 2026 2:30 pmThe Devil Wears Prada\n"
+            "Order TF51ZSTC\n"
+            "21STALLS\n"
+            "STALLS-C-21SECTION\n"
+            "ROW\n"
+            "SEAT529057474466180458\n"
+            "Dominion Theatre\n"
+            "Accessible by 9 shallow steps or a platform lift\n"
+        )
+
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return page_text
+                if mode == "words":
+                    return []
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        class FakeDocument:
+            page_count = 1
+
+            def load_page(self, _index: int):
+                return FakePage()
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch("allocator.ticket_bundle._decode_qr_payload_for_page", return_value="decoded-qr-payload"):
+                parsed = parse_ticket_pdf_pages(b"%PDF-pretend")
+
+        self.assertEqual(parsed[0].show_name, "The Devil Wears Prada")
+        self.assertEqual(parsed[0].venue_name, "Dominion Theatre")
+        self.assertEqual(parsed[0].performance_time, "2.30")
+        self.assertEqual(parsed[0].seat_label, "C21")
+
+    def test_parse_ticket_pdf_pages_requires_decoded_qr_payload(self) -> None:
+        page_text = "Paddington The Musical\nSat 15 March 2026\n7:30pm\nSavoy Theatre\nROW D\nSEAT 30\n"
+
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return page_text
+                if mode == "words":
+                    return []
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        class FakeDocument:
+            page_count = 1
+
+            def load_page(self, _index: int):
+                return FakePage()
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch(
+                "allocator.ticket_bundle._decode_qr_payload_for_page",
+                side_effect=TicketBundleError("Could not decode a QR code from one or more ticket pages."),
+            ):
+                with self.assertRaises(TicketBundleError):
+                    parse_ticket_pdf_pages(b"%PDF-pretend", expected_seats={"D30"})
+
+    def test_build_pkpass_for_ticket_creates_unsigned_wallet_bundle(self) -> None:
+        ticket = ParsedTicketPage(
+            page_index=0,
+            show_name="Paddington The Musical",
+            performance_date="Mar 15",
+            performance_time="7.30",
+            venue_name="Savoy Theatre",
+            row="D",
+            seat="30",
+            seat_label="D30",
+            qr_payload="decoded-qr-payload",
+        )
+
+        blob = build_pkpass_for_ticket(ticket)
+
+        with zipfile.ZipFile(BytesIO(blob)) as archive:
+            names = sorted(archive.namelist())
+            self.assertEqual(names, ["icon.png", "icon@2x.png", "manifest.json", "pass.json"])
+            pass_json = json.loads(archive.read("pass.json"))
+            manifest_json = json.loads(archive.read("manifest.json"))
+
+        self.assertEqual(pass_json["description"], "Theatre ticket")
+        self.assertEqual(pass_json["eventTicket"]["headerFields"][0]["value"], "Savoy Theatre")
+        self.assertEqual(pass_json["eventTicket"]["primaryFields"][0]["value"], "Paddington The Musical")
+        self.assertEqual(pass_json["eventTicket"]["secondaryFields"][0]["value"], "Mar 15")
+        self.assertEqual(pass_json["eventTicket"]["secondaryFields"][1]["value"], "7.30")
+        self.assertEqual(pass_json["eventTicket"]["auxiliaryFields"][0]["value"], "D")
+        self.assertEqual(pass_json["eventTicket"]["auxiliaryFields"][1]["value"], "30")
+        self.assertEqual(pass_json["barcode"]["format"], "PKBarcodeFormatQR")
+        self.assertEqual(pass_json["barcode"]["message"], "decoded-qr-payload")
+        self.assertNotIn("signature", names)
+        self.assertEqual(sorted(manifest_json.keys()), ["icon.png", "icon@2x.png", "pass.json"])
+
+    def test_extract_printed_barcode_value_from_page_prefers_unique_long_numeric_word(self) -> None:
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "words":
+                    return [
+                        (0, 10, 10, 20, "37638599", 0, 0, 0),
+                        (0, 300, 10, 310, "431033772571", 0, 0, 0),
+                    ]
+                if mode == "text":
+                    return "Order 37638599\n431033772571"
+                raise AssertionError(mode)
+
+        self.assertEqual(_extract_printed_barcode_value_from_page(FakePage()), "431033772571")
+
+    def test_extract_printed_barcode_value_from_page_returns_none_for_multiple_bottom_candidates(self) -> None:
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "words":
+                    return [
+                        (0, 300, 10, 310, "123456789012", 0, 0, 0),
+                        (20, 301, 30, 311, "987654321098", 0, 0, 1),
+                    ]
+                if mode == "text":
+                    return "123456789012 987654321098"
+                raise AssertionError(mode)
+
+        self.assertIsNone(_extract_printed_barcode_value_from_page(FakePage()))
 
     def test_extract_seat_tokens_from_compact_token_before_order(self) -> None:
         text = "RoStalls A18Order 38238468"
@@ -380,6 +821,38 @@ class TicketBundleTests(unittest.TestCase):
             manifest_info = archive.getinfo("manifest.csv")
 
         self.assertLess(manifest_info.date_time, pdf_infos[-1].date_time)
+
+    def test_build_bundle_zip_includes_wallet_passes_when_parsed_pages_supplied(self) -> None:
+        groups = [
+            BookingTicketGroup(
+                booking_reference="B100",
+                customer_name="Alice Example",
+                email="alice@example.com",
+                seat_labels=["D30"],
+                page_indexes=[0],
+                missing_seats=[],
+            )
+        ]
+        parsed_pages = [
+            ParsedTicketPage(
+                page_index=0,
+                show_name="Paddington The Musical",
+                performance_date="Mar 15",
+                performance_time="7.30",
+                venue_name="Savoy Theatre",
+                row="D",
+                seat="30",
+                seat_label="D30",
+                qr_payload="decoded-qr-payload",
+            )
+        ]
+
+        with patch("allocator.ticket_bundle.build_group_pdf", return_value=b"pdf-one"):
+            zip_blob = build_bundle_zip(b"%PDF-pretend", groups, parsed_pages=parsed_pages)
+
+        with zipfile.ZipFile(BytesIO(zip_blob)) as archive:
+            self.assertIn("Alice_Example_tickets.pdf", archive.namelist())
+            self.assertIn("wallet/D-30.pkpass", archive.namelist())
 
     def test_build_groups_maps_pages(self) -> None:
         rows = [

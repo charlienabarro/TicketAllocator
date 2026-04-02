@@ -1,5 +1,6 @@
 const DEFAULT_SAVE_LOCATION_HINT =
   "Annabelle's New Ticket Folder / ***SEATING & E-TICKETS / *TICKETS WAITING TO BE SENT OUT";
+const WALLET_FEATURE_ENABLED = false;
 const SAVE_LOCATION_DB_NAME = "ticket-allocator-save-location";
 const SAVE_LOCATION_STORE_NAME = "handles";
 const SAVE_LOCATION_HANDLE_KEY = "default-save-dir";
@@ -85,7 +86,7 @@ function setDownloadButtonVisibility(isVisible) {
   btn.hidden = !isVisible;
   if (!isVisible) {
     btn.disabled = false;
-    btn.textContent = "Download All PDFs";
+    btn.textContent = "Download Tickets";
   }
 }
 
@@ -514,6 +515,50 @@ function renderPreview() {
       pdfTd.textContent = row.pdf_file || "";
     }
 
+    const walletPasses = WALLET_FEATURE_ENABLED && Array.isArray(row.wallet_passes) ? row.wallet_passes : [];
+    const walletFailures = WALLET_FEATURE_ENABLED && Array.isArray(row.wallet_failures) ? row.wallet_failures : [];
+    if (walletPasses.length) {
+      const walletWrap = document.createElement("div");
+      walletWrap.className = "wallet-pass-links";
+      for (const [index, passRow] of walletPasses.entries()) {
+        const passHref = getWalletPassHref(passRow);
+        if (!passHref) continue;
+
+        const passLink = document.createElement("a");
+        passLink.href = passHref;
+        passLink.textContent = `Wallet ${passRow.seat_label || index + 1}`;
+        passLink.className = "wallet-pass-link";
+        passLink.download = passRow.pass_file || "ticket.pkpass";
+        walletWrap.appendChild(passLink);
+
+        if (index < walletPasses.length - 1) {
+          walletWrap.appendChild(document.createTextNode(" "));
+        }
+      }
+
+      if (walletWrap.childNodes.length > 0) {
+        pdfTd.appendChild(document.createElement("br"));
+        pdfTd.appendChild(walletWrap);
+      }
+    }
+
+    if (walletFailures.length) {
+      const failureWrap = document.createElement("div");
+      failureWrap.className = "wallet-pass-failures";
+      for (const failure of walletFailures) {
+        const failureLine = document.createElement("div");
+        failureLine.className = "wallet-pass-failure";
+        const seatLabel = (failure?.seat_label || "").trim();
+        const issue = (failure?.issue || "Wallet pass failed for this ticket.").trim();
+        failureLine.textContent = seatLabel
+          ? `Wallet failed for ${seatLabel}: ${issue}`
+          : `Wallet failed: ${issue}`;
+        failureWrap.appendChild(failureLine);
+      }
+      pdfTd.appendChild(document.createElement("br"));
+      pdfTd.appendChild(failureWrap);
+    }
+
     tr.appendChild(emailTd);
     tr.appendChild(pdfTd);
     tbody.appendChild(tr);
@@ -566,6 +611,47 @@ function renderFailures(failures) {
   wrap.hidden = false;
 }
 
+function renderWalletFailures(failures) {
+  const summary = $("previewWalletFailures");
+  const wrap = $("previewWalletFailureDetails");
+  const tbody = $("previewWalletFailureTable").querySelector("tbody");
+
+  if (!WALLET_FEATURE_ENABLED) {
+    summary.textContent = "";
+    wrap.hidden = true;
+    tbody.innerHTML = "";
+    return;
+  }
+
+  summary.textContent = failures.length
+    ? `${failures.length} ticket(s) could not produce an Apple Wallet pass. Failed seats are listed below.`
+    : "";
+
+  tbody.innerHTML = "";
+  if (!failures.length) {
+    wrap.hidden = true;
+    return;
+  }
+
+  for (const failure of failures) {
+    const tr = document.createElement("tr");
+    const emailTd = document.createElement("td");
+    emailTd.textContent = failure.email || "";
+    const bookingTd = document.createElement("td");
+    bookingTd.textContent = failure.booking_reference || "";
+    const seatTd = document.createElement("td");
+    seatTd.textContent = failure.seat_label || "";
+    const issueTd = document.createElement("td");
+    issueTd.textContent = failure.issue || "Wallet pass failed for this ticket.";
+    tr.appendChild(emailTd);
+    tr.appendChild(bookingTd);
+    tr.appendChild(seatTd);
+    tr.appendChild(issueTd);
+    tbody.appendChild(tr);
+  }
+  wrap.hidden = false;
+}
+
 function setBuildLoading(isLoading) {
   const btn = $("buildBtn");
   const downloadBtn = $("downloadAllBtn");
@@ -594,7 +680,7 @@ function setDownloadLoading(isLoading) {
   if (chooseFolderBtn) {
     chooseFolderBtn.disabled = isLoading;
   }
-  btn.textContent = isLoading ? "Preparing..." : "Download All PDFs";
+  btn.textContent = isLoading ? "Preparing..." : "Download Tickets";
 }
 
 function triggerBlobDownload(blob, fileName) {
@@ -735,19 +821,33 @@ async function restoreSavedDirectorySelection() {
   }
 }
 
-function toDataUrlPdfBlob(dataUrl) {
-  if (!dataUrl || !dataUrl.startsWith("data:application/pdf;base64,")) return null;
-  const base64 = dataUrl.slice("data:application/pdf;base64,".length);
+function toDataUrlBlob(dataUrl, prefix, mimeType) {
+  if (!dataUrl || !dataUrl.startsWith(prefix)) return null;
+  const base64 = dataUrl.slice(prefix.length);
   try {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i += 1) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return new Blob([bytes], { type: "application/pdf" });
+    return new Blob([bytes], { type: mimeType });
   } catch (_) {
     return null;
   }
+}
+
+function toDataUrlPdfBlob(dataUrl) {
+  return toDataUrlBlob(dataUrl, "data:application/pdf;base64,", "application/pdf");
+}
+
+function toDataUrlPkpassBlob(dataUrl) {
+  return toDataUrlBlob(dataUrl, "data:application/vnd.apple.pkpass;base64,", "application/vnd.apple.pkpass");
+}
+
+function getWalletPassHref(passRow) {
+  if (passRow?.pass_download_url) return toAbsoluteUrl(passRow.pass_download_url);
+  if (passRow?.pass_url) return toAbsoluteUrl(passRow.pass_url);
+  return passRow?.pass_data_url || "";
 }
 
 function buildEmailFileContent(row) {
@@ -822,17 +922,34 @@ async function ensureFileHandleModifiedAfter(fileHandle, contents, previousModif
 }
 
 async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
-  if (!state.saveDirHandle) return 0;
+  if (!state.saveDirHandle) return { pdfCount: 0, passCount: 0 };
   const hasPermission = await ensureDirectoryWritePermission(state.saveDirHandle);
   if (!hasPermission) {
     throw new Error("Folder permission was not granted. Please choose the folder again.");
   }
 
   const outputDirHandle = await state.saveDirHandle.getDirectoryHandle(folderName, { create: true });
+  const walletDirHandle = WALLET_FEATURE_ENABLED
+    ? await outputDirHandle.getDirectoryHandle("wallet", { create: true })
+    : null;
   let writtenCount = 0;
+  let writtenPassCount = 0;
   let previousPdfModifiedAt = null;
 
   for (const row of [...previewRows].reverse()) {
+    const walletPasses = WALLET_FEATURE_ENABLED && Array.isArray(row?.wallet_passes) ? row.wallet_passes : [];
+    if (walletDirHandle) {
+      for (const passRow of walletPasses) {
+        const passFileName = passRow?.pass_file || "";
+        const passBlob = toDataUrlPkpassBlob(passRow?.pass_data_url || "");
+        if (!passFileName || !passBlob) continue;
+
+        const passHandle = await walletDirHandle.getFileHandle(passFileName, { create: true });
+        await writeFileHandleContents(passHandle, passBlob);
+        writtenPassCount += 1;
+      }
+    }
+
     const fileName = row?.pdf_file || "";
     const blob = toDataUrlPdfBlob(row?.pdf_data_url || "");
     if (!fileName || !blob) continue;
@@ -852,7 +969,7 @@ async function writePreviewPdfsToSelectedDirectory(previewRows, folderName) {
     writtenCount += 1;
   }
 
-  return writtenCount;
+  return { pdfCount: writtenCount, passCount: writtenPassCount };
 }
 
 $("buildBtn").addEventListener("click", async () => {
@@ -868,13 +985,14 @@ $("buildBtn").addEventListener("click", async () => {
     renderPreview();
     renderStats(data.stats || null);
     renderFailures(data.failures || []);
+    renderWalletFailures(data.wallet_failures || []);
     const hasRows = state.preview.length > 0;
     state.hasBuiltPreview = hasRows;
     updatePerformanceDetailsUi();
     setDownloadButtonVisibility(hasRows);
     setStatus(
       hasRows
-        ? `Ready — ${state.preview.length} email/PDF rows built.`
+        ? `Ready — ${state.preview.length} email/PDF row(s) built.`
         : "Build complete, but no rows were produced.",
       !hasRows
     );
@@ -883,6 +1001,7 @@ $("buildBtn").addEventListener("click", async () => {
     setDownloadButtonVisibility(false);
     renderStats(null);
     renderFailures([]);
+    renderWalletFailures([]);
     setStatus(`Build failed: ${err.message}`, true);
   } finally {
     setBuildLoading(false);
@@ -943,6 +1062,16 @@ async function _collectZipEntries(previewRows, folderPrefix) {
       const emailName = emailFileName(pdfName);
       const emailBytes = new TextEncoder().encode(emailContent);
       entries.push({ name: `${folderPrefix}/${emailName}`, data: emailBytes, modifiedAt: emailModifiedAt });
+    }
+
+    const walletPasses = WALLET_FEATURE_ENABLED && Array.isArray(row?.wallet_passes) ? row.wallet_passes : [];
+    for (const [passIndex, passRow] of walletPasses.entries()) {
+      const passName = passRow?.pass_file || "";
+      const passBlob = toDataUrlPkpassBlob(passRow?.pass_data_url || "");
+      if (!passName || !passBlob) continue;
+      const passModifiedAt = _buildZipEntryModifiedAt(baseModifiedAt, rowIndex, 2 + passIndex);
+      const passBytes = new Uint8Array(await passBlob.arrayBuffer());
+      entries.push({ name: `${folderPrefix}/wallet/${passName}`, data: passBytes, modifiedAt: passModifiedAt });
     }
   }
 
@@ -1093,11 +1222,13 @@ $("downloadAllBtn").addEventListener("click", async () => {
       if (!state.preview.length) {
         throw new Error("Build the email list first.");
       }
-      const writtenCount = await writePreviewPdfsToSelectedDirectory(state.preview, folderName);
-      if (writtenCount === 0) {
+      const written = await writePreviewPdfsToSelectedDirectory(state.preview, folderName);
+      if (written.pdfCount === 0) {
         throw new Error("No PDF files were available to save.");
       }
-      setStatus(`${writtenCount} PDF(s) and email drafts saved to ${state.saveDirName}/${folderName}.`);
+      setStatus(
+        `${written.pdfCount} PDF(s) and email drafts saved to ${state.saveDirName}/${folderName}.`
+      );
     } else {
       if (!state.preview.length) {
         throw new Error("Build the email list first.");

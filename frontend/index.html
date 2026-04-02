@@ -78,7 +78,7 @@
 
         <div class="btn-row">
           <button id="buildBtn" class="btn btn-primary">Build Email PDF List</button>
-          <button id="downloadAllBtn" class="btn btn-secondary" type="button" hidden>Download All PDFs</button>
+          <button id="downloadAllBtn" class="btn btn-secondary" type="button" hidden>Download Tickets</button>
         </div>
 
         <div class="btn-row">
@@ -105,7 +105,7 @@
             <thead>
               <tr>
                 <th>Email</th>
-                <th>PDF</th>
+                <th>Tickets</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -114,6 +114,7 @@
 
         <p id="previewStats" class="stats-line"></p>
         <p id="previewFailures" class="stats-line stats-warn"></p>
+        <p id="previewWalletFailures" class="stats-line stats-warn"></p>
 
         <div id="previewFailureDetails" class="table-wrap" hidden>
           <table id="previewFailureTable">
@@ -127,10 +128,24 @@
             <tbody></tbody>
           </table>
         </div>
+
+        <div id="previewWalletFailureDetails" class="table-wrap" hidden>
+          <table id="previewWalletFailureTable">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Booking Ref</th>
+                <th>Seat</th>
+                <th>Wallet issue</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </section>
     </main>
   </div>
 
-  <script src="/static/app.js?v=20260315s"></script>
+  <script src="/static/app.js?v=20260402a"></script>
 </body>
 </html>

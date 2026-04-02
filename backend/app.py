@@ -22,14 +22,16 @@ from allocator.models import Allocation, AvailableSeat, Booking, MatchStatus, Pe
 from allocator.seat_plan_ingestion import SeatPlanIngestor
 from allocator.seat_range_expander import expand_ticket_stock_rows
 from allocator.ticket_bundle import (
+    ParsedTicketPageResult,
     TicketBundleError,
+    build_pkpass_artifacts,
     build_output_filenames,
     build_booking_groups,
     build_group_pdf,
     build_bundle_zip,
-    extract_pdf_page_seat_map,
-    extract_ticket_performance_metadata,
     group_has_output_pdf,
+    parse_ticket_pdf_page_results,
+    parse_ticket_pdf_pages,
     parse_allocation_csv,
     parse_seat_list,
     split_groups_for_output,
@@ -49,7 +51,7 @@ from backend.store import InMemoryStore
 app = FastAPI(title="Seat Allocator API", version="0.1.0")
 store = InMemoryStore()
 ingestor = SeatPlanIngestor()
-preview_download_cache: dict[str, dict[str, bytes]] = {}
+preview_download_cache: dict[str, dict[str, tuple[bytes, str]]] = {}
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 EMAIL_CELL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -71,18 +73,23 @@ async def preview_ticket_bundle(
     expected_seats = _expected_seat_labels(allocation_rows)
 
     try:
-        seat_map = extract_pdf_page_seat_map(pdf_content, expected_seats=expected_seats)
+        parsed_page_results = parse_ticket_pdf_page_results(pdf_content, expected_seats=expected_seats)
+        seat_map = _seat_map_from_page_results(parsed_page_results)
         groups = build_booking_groups(allocation_rows, seat_map)
+        parsed_pages = [result.to_parsed_ticket_page() for result in parsed_page_results if result.wallet_ready]
+        pass_artifacts = build_pkpass_artifacts(parsed_pages)
     except TicketBundleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     output_groups, excluded_groups = split_groups_for_output(groups)
     filenames = build_output_filenames(output_groups)
-    preview_files = _build_preview_files(pdf_content, output_groups, filenames)
+    preview_files = _build_preview_files(pdf_content, output_groups, filenames, pass_artifacts)
     preview_id = _store_preview_files(preview_files) if preview_files else None
-    performance_metadata = extract_ticket_performance_metadata(pdf_content)
+    performance_metadata = _build_performance_metadata_from_page_results(parsed_page_results)
     missing_unique = {seat for group in groups for seat in group.missing_seats}
     matched_unique = {seat for group in groups for seat in group.seat_labels if seat in seat_map}
+    wallet_failure_rows = _collect_wallet_failure_rows(output_groups, parsed_page_results)
+    wallet_pass_count = len(pass_artifacts)
 
     return {
         "rows": [
@@ -93,7 +100,16 @@ async def preview_ticket_bundle(
                 "pdf_download_url": (
                     f"/ticket-bundles/preview/{preview_id}/files/{quote(filename)}?download=1" if preview_id else ""
                 ),
-                "pdf_data_url": f"data:application/pdf;base64,{base64.b64encode(preview_files[filename]).decode('ascii')}",
+                "pdf_data_url": (
+                    f"data:application/pdf;base64,{base64.b64encode(preview_files[filename][0]).decode('ascii')}"
+                ),
+                "wallet_passes": _build_wallet_pass_rows(
+                    group=group,
+                    preview_id=preview_id,
+                    pass_artifacts=pass_artifacts,
+                    parsed_page_results=parsed_page_results,
+                ),
+                "wallet_failures": _build_wallet_failure_rows_for_group(group, parsed_page_results),
             }
             for group, filename in zip(output_groups, filenames)
         ],
@@ -106,11 +122,14 @@ async def preview_ticket_bundle(
             }
             for group in excluded_groups
         ],
+        "wallet_failures": wallet_failure_rows,
         "stats": {
             "requested_seat_count": len(expected_seats),
             "matched_seat_count": len(matched_unique),
             "missing_seat_count": len(missing_unique),
             "output_pdf_count": len(output_groups),
+            "wallet_pass_count": wallet_pass_count,
+            "wallet_failure_count": len(wallet_failure_rows),
         },
         "performance_metadata": performance_metadata,
     }
@@ -126,9 +145,10 @@ async def generate_ticket_bundle(
     expected_seats = _expected_seat_labels(allocation_rows)
 
     try:
-        seat_map = extract_pdf_page_seat_map(pdf_content, expected_seats=expected_seats)
+        parsed_pages = parse_ticket_pdf_pages(pdf_content, expected_seats=expected_seats)
+        seat_map = _seat_map_from_parsed_pages(parsed_pages)
         groups = build_booking_groups(allocation_rows, seat_map)
-        zip_blob = build_bundle_zip(pdf_content, groups)
+        zip_blob = build_bundle_zip(pdf_content, groups, parsed_pages=parsed_pages)
     except TicketBundleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -141,12 +161,13 @@ def download_preview_file(preview_id: str, file_name: str, download: bool = Quer
     preview = preview_download_cache.get(preview_id)
     if not preview:
         raise HTTPException(status_code=404, detail="Preview file set not found. Build preview again.")
-    blob = preview.get(file_name)
-    if blob is None:
+    artifact = preview.get(file_name)
+    if artifact is None:
         raise HTTPException(status_code=404, detail="Preview PDF not found.")
+    blob, media_type = artifact
     disposition = "attachment" if download else "inline"
     headers = {"Content-Disposition": f'{disposition}; filename="{file_name}"'}
-    return Response(content=blob, media_type="application/pdf", headers=headers)
+    return Response(content=blob, media_type=media_type, headers=headers)
 
 
 @app.post("/performances", response_model=CreatePerformanceResponse)
@@ -525,16 +546,128 @@ def _expected_seat_labels(allocation_rows: list[dict[str, str]]) -> set[str]:
     return labels
 
 
-def _build_preview_files(pdf_content: bytes, groups, filenames: list[str]) -> dict[str, bytes]:
-    files: dict[str, bytes] = {}
+def _seat_map_from_parsed_pages(parsed_pages) -> dict[str, int]:
+    seat_map: dict[str, int] = {}
+    for page in parsed_pages:
+        if page.seat_label in seat_map:
+            raise TicketBundleError(f"Duplicate ticket seat detected in PDF: {page.seat_label}")
+        seat_map[page.seat_label] = page.page_index
+    return seat_map
+
+
+def _seat_map_from_page_results(parsed_page_results: list[ParsedTicketPageResult]) -> dict[str, int]:
+    seat_map: dict[str, int] = {}
+    for page in parsed_page_results:
+        if page.seat_label in seat_map:
+            raise TicketBundleError(f"Duplicate ticket seat detected in PDF: {page.seat_label}")
+        seat_map[page.seat_label] = page.page_index
+    return seat_map
+
+
+def _build_preview_files(
+    pdf_content: bytes,
+    groups,
+    filenames: list[str],
+    pass_artifacts: dict[int, tuple[str, bytes]],
+) -> dict[str, tuple[bytes, str]]:
+    files: dict[str, tuple[bytes, str]] = {}
     for group, name in zip(groups, filenames):
         if not group_has_output_pdf(group):
             continue
-        files[name] = build_group_pdf(pdf_content, group)
+        files[name] = (build_group_pdf(pdf_content, group), "application/pdf")
+        for page_index in group.page_indexes:
+            artifact = pass_artifacts.get(page_index)
+            if artifact is None:
+                continue
+            pass_name, pass_blob = artifact
+            files[pass_name] = (pass_blob, "application/vnd.apple.pkpass")
     return files
 
 
-def _store_preview_files(files: dict[str, bytes]) -> str:
+def _build_wallet_pass_rows(
+    group,
+    preview_id: str | None,
+    pass_artifacts: dict[int, tuple[str, bytes]],
+    parsed_page_results: list[ParsedTicketPageResult],
+) -> list[dict[str, str]]:
+    page_results_by_index = {page.page_index: page for page in parsed_page_results}
+    wallet_rows: list[dict[str, str]] = []
+    for page_index in group.page_indexes:
+        artifact = pass_artifacts.get(page_index)
+        if artifact is None:
+            continue
+        pass_name, pass_blob = artifact
+        parsed_page = page_results_by_index.get(page_index)
+        wallet_rows.append(
+            {
+                "seat_label": parsed_page.seat_label if parsed_page else "",
+                "pass_file": pass_name,
+                "pass_url": f"/ticket-bundles/preview/{preview_id}/files/{quote(pass_name)}" if preview_id else "",
+                "pass_download_url": (
+                    f"/ticket-bundles/preview/{preview_id}/files/{quote(pass_name)}?download=1" if preview_id else ""
+                ),
+                "pass_data_url": (
+                    "data:application/vnd.apple.pkpass;base64,"
+                    f"{base64.b64encode(pass_blob).decode('ascii')}"
+                ),
+            }
+        )
+    return wallet_rows
+
+
+def _build_wallet_failure_rows_for_group(
+    group,
+    parsed_page_results: list[ParsedTicketPageResult],
+) -> list[dict[str, str]]:
+    page_results_by_index = {page.page_index: page for page in parsed_page_results}
+    failures: list[dict[str, str]] = []
+    for page_index in group.page_indexes:
+        parsed_page = page_results_by_index.get(page_index)
+        if parsed_page is None or parsed_page.wallet_ready:
+            continue
+        failures.append(
+            {
+                "seat_label": parsed_page.seat_label,
+                "issue": parsed_page.wallet_error or "Wallet pass failed for this ticket.",
+            }
+        )
+    return failures
+
+
+def _collect_wallet_failure_rows(
+    groups,
+    parsed_page_results: list[ParsedTicketPageResult],
+) -> list[dict[str, str]]:
+    page_results_by_index = {page.page_index: page for page in parsed_page_results}
+    failures: list[dict[str, str]] = []
+    for group in groups:
+        for page_index in group.page_indexes:
+            parsed_page = page_results_by_index.get(page_index)
+            if parsed_page is None or parsed_page.wallet_ready:
+                continue
+            failures.append(
+                {
+                    "email": group.email,
+                    "booking_reference": group.booking_reference,
+                    "seat_label": parsed_page.seat_label,
+                    "issue": parsed_page.wallet_error or "Wallet pass failed for this ticket.",
+                }
+            )
+    return failures
+
+
+def _build_performance_metadata_from_page_results(parsed_pages) -> dict[str, str | bool | None]:
+    if not parsed_pages:
+        return {"performance_date": None, "performance_time": None, "confidence": False}
+    first_page = next((page for page in parsed_pages if page.performance_date or page.performance_time), parsed_pages[0])
+    return {
+        "performance_date": first_page.performance_date,
+        "performance_time": first_page.performance_time,
+        "confidence": bool(first_page.performance_date and first_page.performance_time),
+    }
+
+
+def _store_preview_files(files: dict[str, tuple[bytes, str]]) -> str:
     preview_id = uuid4().hex
     preview_download_cache[preview_id] = files
 

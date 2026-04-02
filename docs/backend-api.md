@@ -46,4 +46,14 @@ Seat list format can include:
 
 `POST /ticket-bundles/generate` returns `ticket_bundle.zip` containing:
 - one PDF per booking
+- one unsigned `.pkpass` per matched ticket page under `wallet/`
 - `manifest.csv` with booking ref, customer, email, seats, page numbers, missing seats
+
+`POST /ticket-bundles/preview` returns one row per booking with:
+- grouped PDF metadata and inline PDF data
+- `wallet_passes`: one entry per parsed ticket page, each including:
+  - `seat_label`
+  - `pass_file`
+  - `pass_url`
+  - `pass_download_url`
+  - `pass_data_url`

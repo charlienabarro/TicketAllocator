@@ -42,6 +42,29 @@ class FrontendZipMetadataTests(unittest.TestCase):
         self.assertIn("const emailModifiedAt = _buildZipEntryModifiedAt(baseModifiedAt, rowIndex, 1);", source)
         self.assertRegex(source, r"modifiedAt\.setSeconds\(modifiedAt\.getSeconds\(\) - \(rowIndex \* 4\) - \(entryOffset \* 2\)\);")
 
+    def test_wallet_passes_are_written_to_selected_directory(self) -> None:
+        source = FRONTEND_APP_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("const WALLET_FEATURE_ENABLED = false;", source)
+        self.assertIn('const walletDirHandle = WALLET_FEATURE_ENABLED', source)
+        self.assertIn("const walletPasses = WALLET_FEATURE_ENABLED && Array.isArray(row?.wallet_passes) ? row.wallet_passes : [];", source)
+        self.assertIn("const passHandle = await walletDirHandle.getFileHandle(passFileName, { create: true });", source)
+
+    def test_client_zip_builder_includes_wallet_pass_entries(self) -> None:
+        source = FRONTEND_APP_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("function toDataUrlPkpassBlob(dataUrl)", source)
+        self.assertIn("const passModifiedAt = _buildZipEntryModifiedAt(baseModifiedAt, rowIndex, 2 + passIndex);", source)
+        self.assertIn("entries.push({ name: `${folderPrefix}/wallet/${passName}`, data: passBytes, modifiedAt: passModifiedAt });", source)
+
+    def test_preview_renders_wallet_failures_clearly(self) -> None:
+        source = FRONTEND_APP_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("const walletFailures = WALLET_FEATURE_ENABLED && Array.isArray(row.wallet_failures) ? row.wallet_failures : [];", source)
+        self.assertIn("if (!WALLET_FEATURE_ENABLED) {", source)
+        self.assertIn("function renderWalletFailures(failures)", source)
+        self.assertIn("renderWalletFailures(data.wallet_failures || []);", source)
+
 
 if __name__ == "__main__":
     unittest.main()

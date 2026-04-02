@@ -531,6 +531,39 @@ a:hover {
   margin-right: 8px;
 }
 
+.wallet-pass-links {
+  margin-top: 8px;
+  line-height: 1.8;
+}
+
+.wallet-pass-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f7ede5;
+  color: #8a4d17;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.wallet-pass-link:hover {
+  background: #f1dfcf;
+  text-decoration: none;
+}
+
+.wallet-pass-failures {
+  margin-top: 8px;
+}
+
+.wallet-pass-failure {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
 /* ── Keyframes ─────────────────────────────────────────── */
 
 @keyframes slide {

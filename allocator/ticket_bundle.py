@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
+import json
+import os
 import re
 import zipfile
 from dataclasses import dataclass
@@ -62,6 +66,7 @@ RESERVED_ROW_TOKENS = {
     "OCT",
     "NOV",
     "DEC",
+    "BY",
     "SW",
     "NW",
     "SE",
@@ -108,6 +113,87 @@ DAY_MONTH_RE = re.compile(
 TIME_12H_RE = re.compile(r"\b(\d{1,2})(?::|\.)(\d{2})\s*([AP])\.?\s*M\.?\b", re.IGNORECASE)
 TIME_12H_COMPACT_RE = re.compile(r"\b(\d{1,2})\s*([AP])\.?\s*M\.?\b", re.IGNORECASE)
 TIME_24H_RE = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
+DAY_NAME_PATTERN = r"(?:Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)"
+FULL_DATE_WITH_YEAR_RE = re.compile(
+    rf"(?:{DAY_NAME_PATTERN}\s+)?\d{{1,2}}\s+(?:{MONTH_PATTERN})\s+\d{{4}}",
+    re.IGNORECASE,
+)
+VENUE_KEYWORD_RE = re.compile(
+    r"\b("
+    r"theatre|theater|arena|hall|playhouse|opera|centre|center|room|auditorium|vic|lyceum|apollo|"
+    r"troubadour|criterion|hippodrome|coliseum|bridge|wyndham|garrick|aldwych|duke|royal|palace|"
+    r"warehouse|studio|arts|festival"
+    r")\b",
+    re.IGNORECASE,
+)
+SHOW_NOISE_RE = re.compile(
+    r"\b(order|booking|barcode|qr|seat|row|section|ticket|group|price|doors|performance|sponsor|production)\b",
+    re.IGNORECASE,
+)
+SHOW_LABEL_BLACKLIST = {"event"}
+LOWERCASE_TITLE_CONNECTORS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
+DISCLAIMER_PHRASES = (
+    "Tickets cannot be sold on for commercial gain",
+    "Failure to comply will make this ticket",
+    "Registered Charity",
+    "Venue and Travel info",
+    "No need to print your ticket",
+)
+KNOWN_SHOW_PATTERNS = [
+    (re.compile(r"\babba voyage\b", re.IGNORECASE), "ABBA Voyage"),
+    (re.compile(r"one flew over the cuckoo[’']?s nest", re.IGNORECASE), "One Flew Over the Cuckoo's Nest"),
+    (re.compile(r"titan[íi]que", re.IGNORECASE), "Titanique"),
+    (re.compile(r"paddington the musical", re.IGNORECASE), "Paddington The Musical"),
+    (re.compile(r"\bhamilton\b", re.IGNORECASE), "Hamilton"),
+    (re.compile(r"\bthe car man\b", re.IGNORECASE), "The Car Man"),
+    (re.compile(r"jesus christ superstar", re.IGNORECASE), "Jesus Christ Superstar"),
+    (re.compile(r"inter alia", re.IGNORECASE), "Inter Alia"),
+    (re.compile(r"the devil wears prada", re.IGNORECASE), "The Devil Wears Prada"),
+    (re.compile(r"the holy rosenbergs", re.IGNORECASE), "The Holy Rosenbergs"),
+    (re.compile(r"back to the future: the musical", re.IGNORECASE), "Back To The Future: The Musical"),
+    (re.compile(r"disney[’']?s the lion king", re.IGNORECASE), "Disney's The Lion King"),
+    (re.compile(r"sinatra the musical", re.IGNORECASE), "Sinatra The Musical"),
+    (re.compile(r"marie\s*&\s*rosetta", re.IGNORECASE), "Marie & Rosetta"),
+]
+KNOWN_VENUE_HINTS = [
+    (re.compile(r"\babba arena\b", re.IGNORECASE), "ABBA Arena"),
+    (re.compile(r"oldvictheatre\.com|the old vic", re.IGNORECASE), "The Old Vic"),
+    (re.compile(r"criterion theatre|cri-terion-theatre\.co\.uk", re.IGNORECASE), "Criterion Theatre"),
+    (re.compile(r"savoy theatre", re.IGNORECASE), "Savoy Theatre"),
+    (re.compile(r"victoria palace theatre", re.IGNORECASE), "Victoria Palace Theatre"),
+    (re.compile(r"wyndham'?s theatre", re.IGNORECASE), "Wyndham's Theatre"),
+    (re.compile(r"london palladium|the london palladium", re.IGNORECASE), "The London Palladium"),
+    (re.compile(r"menier chocolate factory", re.IGNORECASE), "Menier Chocolate Factory"),
+    (re.compile(r"adelphi theatre", re.IGNORECASE), "Adelphi Theatre"),
+    (re.compile(r"lyceum theatre", re.IGNORECASE), "Lyceum Theatre"),
+    (re.compile(r"dominion theatre", re.IGNORECASE), "Dominion Theatre"),
+    (re.compile(r"aldwych theatre", re.IGNORECASE), "Aldwych Theatre"),
+    (re.compile(r"rosebery avenue,\s*london ec1r 4tn|sadler'?s wells", re.IGNORECASE), "Sadler's Wells Theatre"),
+    (re.compile(r"sohoplace|4 soho place", re.IGNORECASE), "@sohoplace"),
+]
+PASS_ICON_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII="
+)
+WALLET_PASS_TYPE_IDENTIFIER = os.getenv("WALLET_PASS_TYPE_IDENTIFIER", "pass.com.ticketallocator.test")
+WALLET_TEAM_IDENTIFIER = os.getenv("WALLET_TEAM_IDENTIFIER", "TKTTEST123")
+WALLET_ORGANIZATION_NAME = os.getenv("WALLET_ORGANIZATION_NAME", "Ticket Allocator")
+WALLET_PASS_DESCRIPTION = os.getenv("WALLET_PASS_DESCRIPTION", "Theatre ticket")
 
 
 @dataclass(slots=True)
@@ -118,6 +204,52 @@ class BookingTicketGroup:
     seat_labels: list[str]
     page_indexes: list[int]
     missing_seats: list[str]
+
+
+@dataclass(slots=True)
+class ParsedTicketPage:
+    page_index: int
+    show_name: str
+    performance_date: str
+    performance_time: str
+    venue_name: str
+    row: str
+    seat: str
+    seat_label: str
+    qr_payload: str
+
+
+@dataclass(slots=True)
+class ParsedTicketPageResult:
+    page_index: int
+    show_name: str
+    performance_date: str
+    performance_time: str
+    venue_name: str
+    row: str
+    seat: str
+    seat_label: str
+    qr_payload: str | None
+    wallet_error: str | None = None
+
+    @property
+    def wallet_ready(self) -> bool:
+        return bool(self.qr_payload and not self.wallet_error)
+
+    def to_parsed_ticket_page(self) -> ParsedTicketPage:
+        if not self.wallet_ready:
+            raise TicketBundleError(self.wallet_error or f"Wallet pass could not be built for seat {self.seat_label}.")
+        return ParsedTicketPage(
+            page_index=self.page_index,
+            show_name=self.show_name,
+            performance_date=self.performance_date,
+            performance_time=self.performance_time,
+            venue_name=self.venue_name,
+            row=self.row,
+            seat=self.seat,
+            seat_label=self.seat_label,
+            qr_payload=str(self.qr_payload),
+        )
 
 
 def group_has_output_pdf(group: BookingTicketGroup) -> bool:
@@ -447,16 +579,22 @@ def _extract_performance_time_candidates(text: str) -> list[str]:
 
     matches: list[str] = []
     for match in TIME_12H_RE.finditer(text):
+        if _should_ignore_time_match(text, match.start(), match.end()):
+            continue
         formatted = _format_12h_time(match.group(1), match.group(2), match.group(3))
         if formatted:
             matches.append(formatted)
 
     for match in TIME_12H_COMPACT_RE.finditer(text):
+        if _should_ignore_time_match(text, match.start(), match.end()):
+            continue
         formatted = _format_12h_time(match.group(1), "00", match.group(2))
         if formatted:
             matches.append(formatted)
 
     for match in TIME_24H_RE.finditer(text):
+        if _should_ignore_time_match(text, match.start(), match.end()):
+            continue
         formatted = _format_24h_time(match.group(1), match.group(2))
         if formatted:
             matches.append(formatted)
@@ -506,6 +644,18 @@ def _format_24h_time(hour_value: str, minute_value: str) -> str | None:
     return f"{display_hour}.{minute:02d}"
 
 
+def _should_ignore_time_match(text: str, start: int, end: int) -> bool:
+    before = text[max(0, start - 24) : start].lower()
+    after = text[end : min(len(text), end + 12)].lower()
+    if "£" in before:
+        return True
+    if any(term in before for term in ("price", "commission", "levy", "restoration", "contact", "help@", "mon-fri", "9am")):
+        return True
+    if any(term in after for term in ("commission", "levy")) and "@" not in before:
+        return False
+    return False
+
+
 def _dedupe_strings(values: list[str]) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
@@ -516,6 +666,597 @@ def _dedupe_strings(values: list[str]) -> list[str]:
         seen.add(key)
         deduped.append(value.strip())
     return deduped
+
+
+def parse_ticket_pdf_page_results(
+    pdf_bytes: bytes,
+    expected_seats: set[str] | None = None,
+) -> list[ParsedTicketPageResult]:
+    fitz = _load_fitz_backend()
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    normalized_expected = _normalize_seat_labels(expected_seats or set())
+    raw_pages: list[dict[str, str | int | None]] = []
+    aggregate_text_parts: list[str] = []
+
+    for page_index in range(document.page_count):
+        page = document.load_page(page_index)
+        page_text = _extract_fitz_page_text(page)
+        seat_label = _extract_page_seat_label_from_page(page, page_text, normalized_expected)
+        if normalized_expected and seat_label is None:
+            continue
+        if not normalized_expected and seat_label is None and _should_skip_generic_admission_page(page_text):
+            continue
+        aggregate_text_parts.append(page_text)
+        raw_pages.append(
+            {
+                "page_index": page_index,
+                "text": page_text,
+                "seat_label": seat_label,
+            }
+        )
+
+    if not raw_pages:
+        raise TicketBundleError(
+            "Could not detect seat labels in ticket PDF. Ensure each page contains labels like C1 or AA14."
+        )
+
+    document_metadata = _extract_ticket_document_metadata(aggregate_text_parts)
+    parsed_pages: list[ParsedTicketPageResult] = []
+    for raw_page in raw_pages:
+        page_index = int(raw_page["page_index"])
+        page = document.load_page(page_index)
+        page_text = str(raw_page["text"])
+        seat_label = raw_page["seat_label"] or _extract_page_seat_label_from_page(page, page_text, normalized_expected)
+        if not seat_label:
+            raise TicketBundleError(f"Could not detect row and seat on ticket page {page_index + 1}.")
+        row, seat = _split_seat_label(seat_label)
+        page_metadata = _extract_ticket_page_metadata(page_text)
+        show_name = page_metadata["show_name"] or document_metadata["show_name"]
+        performance_date = page_metadata["performance_date"] or document_metadata["performance_date"]
+        performance_time = page_metadata["performance_time"] or document_metadata["performance_time"]
+        venue_name = page_metadata["venue_name"] or document_metadata["venue_name"]
+        qr_payload: str | None = None
+        wallet_error: str | None = None
+        try:
+            qr_payload = _decode_qr_payload_for_page(page)
+        except TicketBundleError as exc:
+            wallet_error = str(exc)
+
+        missing_fields = [
+            label
+            for label, value in (
+                ("show name", show_name),
+                ("date", performance_date),
+                ("time", performance_time),
+                ("venue", venue_name),
+            )
+            if not value
+        ]
+        if missing_fields and not wallet_error:
+            wallet_error = f"Could not detect {', '.join(missing_fields)} on ticket page {page_index + 1}."
+        if not qr_payload and not wallet_error:
+            wallet_error = f"Could not decode the original QR code on ticket page {page_index + 1}."
+        parsed_pages.append(
+            ParsedTicketPageResult(
+                page_index=page_index,
+                show_name=str(show_name or ""),
+                performance_date=str(performance_date or ""),
+                performance_time=str(performance_time or ""),
+                venue_name=str(venue_name or ""),
+                row=row,
+                seat=seat,
+                seat_label=seat_label,
+                qr_payload=qr_payload,
+                wallet_error=wallet_error,
+            )
+        )
+
+    return parsed_pages
+
+
+def parse_ticket_pdf_pages(pdf_bytes: bytes, expected_seats: set[str] | None = None) -> list[ParsedTicketPage]:
+    parsed_results = parse_ticket_pdf_page_results(pdf_bytes, expected_seats=expected_seats)
+    parsed_pages: list[ParsedTicketPage] = []
+    for result in parsed_results:
+        parsed_pages.append(result.to_parsed_ticket_page())
+    return parsed_pages
+
+
+def _extract_fitz_page_text(page) -> str:
+    text_parts: list[str] = []
+    try:
+        page_text = page.get_text("text") or ""
+    except Exception:
+        page_text = ""
+    if page_text.strip():
+        text_parts.append(page_text)
+
+    try:
+        words = page.get_text("words") or []
+    except Exception:
+        words = []
+    if words:
+        ordered_words = [str(word[4]).strip() for word in sorted(words, key=lambda item: (item[5], item[6], item[7], item[0]))]
+        word_text = " ".join(word for word in ordered_words if word)
+        if word_text:
+            text_parts.append(word_text)
+
+    return "\n".join(part for part in text_parts if part.strip())
+
+
+def _extract_page_seat_label(text: str, expected_seats: set[str]) -> str | None:
+    matches = _extract_seat_tokens(text)
+    if expected_seats:
+        filtered = [seat for seat in matches if seat in expected_seats]
+        if len(filtered) == 1:
+            return filtered[0]
+        if len(filtered) > 1:
+            raise TicketBundleError(
+                "Found multiple matching seats on a ticket page. Please ensure each page contains exactly one ticket."
+            )
+        anchored = _extract_expected_seats_from_text(text, expected_seats)
+        if len(anchored) == 1:
+            return anchored[0]
+        if len(anchored) > 1:
+            raise TicketBundleError(
+                "Found multiple matching seats on a ticket page. Please ensure each page contains exactly one ticket."
+            )
+        return None
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise TicketBundleError(
+            "Found multiple seat labels on a ticket page. Please ensure each page contains exactly one ticket."
+        )
+    return None
+
+
+def _extract_page_seat_label_from_page(page, text: str, expected_seats: set[str]) -> str | None:
+    abba_label = _extract_abba_ticket_seat_label_from_page(page, text)
+    if abba_label:
+        if expected_seats and abba_label not in expected_seats:
+            return None
+        return abba_label
+    if _should_skip_generic_admission_page(text):
+        return None
+    return _extract_page_seat_label(text, expected_seats)
+
+
+def _extract_abba_ticket_seat_label_from_page(page, text: str) -> str | None:
+    if not _looks_like_abba_ticket_text(text):
+        return None
+
+    try:
+        words = page.get_text("words") or []
+    except Exception:
+        words = []
+    if not words:
+        return None
+
+    top_words = [word for word in words if float(word[1]) < 280]
+    if not top_words:
+        return None
+
+    line_groups: list[dict[str, object]] = []
+    for word in sorted(top_words, key=lambda item: (item[1], item[0])):
+        token = str(word[4]).strip()
+        if not token:
+            continue
+        y_pos = float(word[1])
+        x_pos = float(word[0])
+        if line_groups and abs(float(line_groups[-1]["y"]) - y_pos) <= 6:
+            cast_words = line_groups[-1]["words"]
+            assert isinstance(cast_words, list)
+            cast_words.append((x_pos, token))
+        else:
+            line_groups.append({"y": y_pos, "words": [(x_pos, token)]})
+
+    normalized_lines: list[list[str]] = []
+    for line in line_groups:
+        words_in_line = line["words"]
+        assert isinstance(words_in_line, list)
+        ordered = [token for _x, token in sorted(words_in_line, key=lambda item: item[0])]
+        filtered = [token for token in ordered if token != "-"]
+        if filtered:
+            normalized_lines.append(filtered)
+
+    for line in reversed(normalized_lines):
+        if len(line) != 2:
+            continue
+        first, second = line
+        if _is_row_token(first) and _is_seat_number_token(second):
+            seat = _seat_token(first, second)
+            if seat:
+                return seat
+        if _is_seat_number_token(first) and _is_row_token(second):
+            seat = _seat_token(second, first)
+            if seat:
+                return seat
+
+    return None
+
+
+def _looks_like_abba_ticket_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    return "abba voyage" in lowered and "abba arena" in lowered and "groups ticket" in lowered
+
+
+def _should_skip_generic_admission_page(text: str) -> bool:
+    lowered = (text or "").lower()
+    return _looks_like_abba_ticket_text(text) and "dance floor" in lowered
+
+
+def _extract_ticket_document_metadata(texts: list[str]) -> dict[str, str | None]:
+    combined_text = _normalize_metadata_text("\n".join(text for text in texts if text.strip()))
+    return {
+        "show_name": _first_candidate(_extract_show_name_candidates(combined_text)),
+        "performance_date": _select_single_candidate(_extract_performance_date_candidates(combined_text)),
+        "performance_time": _select_single_candidate(_extract_performance_time_candidates(combined_text)),
+        "venue_name": _first_candidate(_extract_venue_candidates(combined_text)),
+    }
+
+
+def _extract_ticket_page_metadata(text: str) -> dict[str, str | None]:
+    normalized_text = _normalize_metadata_text(text)
+    return {
+        "show_name": _first_candidate(_extract_show_name_candidates(normalized_text)),
+        "performance_date": _select_single_candidate(_extract_performance_date_candidates(normalized_text)),
+        "performance_time": _select_single_candidate(_extract_performance_time_candidates(normalized_text)),
+        "venue_name": _first_candidate(_extract_venue_candidates(normalized_text)),
+    }
+
+
+def _select_single_candidate(values: list[str]) -> str | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    return None
+
+
+def _first_candidate(values: list[str]) -> str | None:
+    return values[0] if values else None
+
+
+def _extract_show_name_candidates(text: str) -> list[str]:
+    normalized_text = _normalize_metadata_text(text)
+    candidates: list[str] = list(_extract_known_show_candidates(normalized_text))
+    candidates.extend(_extract_show_name_candidates_near_dates(normalized_text))
+    candidates.extend(_extract_show_name_candidates_after_dates(normalized_text))
+    for line in _clean_ticket_lines(normalized_text):
+        if not _looks_like_show_line(line):
+            continue
+        candidates.append(line)
+    return _dedupe_strings(candidates)
+
+
+def _extract_venue_candidates(text: str) -> list[str]:
+    normalized_text = _normalize_metadata_text(text)
+    known_candidates = _extract_known_venue_candidates(normalized_text)
+    if known_candidates:
+        return known_candidates
+
+    candidates: list[str] = []
+    for line in _clean_ticket_lines(normalized_text):
+        if not VENUE_KEYWORD_RE.search(line):
+            continue
+        if _looks_like_disclaimer_line(line):
+            continue
+        if SHOW_NOISE_RE.search(line):
+            continue
+        if not re.search(r"[A-Za-z]{3,}", line):
+            continue
+        candidates.append(line)
+    return _dedupe_strings(candidates)
+
+
+def _clean_ticket_lines(text: str) -> list[str]:
+    raw_lines = re.split(r"[\r\n]+", text or "")
+    cleaned: list[str] = []
+    for raw_line in raw_lines:
+        line = re.sub(r"\s+", " ", raw_line).strip(" |")
+        if not line:
+            continue
+        cleaned.append(line)
+    return cleaned
+
+
+def _normalize_metadata_text(text: str) -> str:
+    normalized_lines: list[str] = []
+    for raw_line in re.split(r"[\r\n]+", text or ""):
+        line = raw_line
+        line = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", line)
+        line = re.sub(r"(?<=\d{4})(?=\d{1,2}(?::|\.)\d{2}\s*[APap]?)", " ", line)
+        line = re.sub(r"(?<=[AP]M)(?=[A-Z])", " ", line)
+        line = re.sub(r"(\d{1,2}:\d{2})(?=[A-Z])", r"\1 ", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            normalized_lines.append(line)
+    return "\n".join(normalized_lines)
+
+
+def _extract_show_name_candidates_near_dates(text: str) -> list[str]:
+    candidates: list[str] = []
+    for match in FULL_DATE_WITH_YEAR_RE.finditer(text):
+        window = text[max(0, match.start() - 140) : match.start()]
+        candidate = _extract_trailing_title_from_context(window)
+        if candidate:
+            candidates.append(candidate)
+    return _dedupe_strings(candidates)
+
+
+def _extract_show_name_candidates_after_dates(text: str) -> list[str]:
+    candidates: list[str] = []
+    for match in FULL_DATE_WITH_YEAR_RE.finditer(text):
+        window = text[match.end() : min(len(text), match.end() + 120)]
+        window = re.sub(r"^[^A-Za-z]+", "", window)
+        candidate = _extract_leading_title_from_context(window)
+        if candidate:
+            candidates.append(candidate)
+    return _dedupe_strings(candidates)
+
+
+def _extract_trailing_title_from_context(context: str) -> str | None:
+    tokens = re.findall(r"[A-Za-z0-9'’&.-]+", context)
+    if not tokens:
+        return None
+
+    collected: list[str] = []
+    seen_title_word = False
+    for token in reversed(tokens):
+        clean = token.strip()
+        if not clean:
+            continue
+        lowered = clean.lower()
+        if lowered in SHOW_LABEL_BLACKLIST:
+            break
+        if clean[0].isupper():
+            collected.append(clean)
+            seen_title_word = True
+            continue
+        if lowered in LOWERCASE_TITLE_CONNECTORS and seen_title_word:
+            collected.append(lowered)
+            continue
+        break
+
+    if not collected:
+        return None
+    candidate = " ".join(reversed(collected)).strip()
+    if not _looks_like_show_line(candidate):
+        return None
+    return candidate
+
+
+def _extract_leading_title_from_context(context: str) -> str | None:
+    tokens = re.findall(r"[A-Za-z0-9'’&:-]+", context)
+    if not tokens:
+        return None
+
+    collected: list[str] = []
+    for token in tokens:
+        clean = token.strip()
+        if not clean:
+            continue
+        lowered = clean.lower()
+        if lowered in SHOW_LABEL_BLACKLIST:
+            continue
+        if clean[0].isupper():
+            collected.append(clean)
+            continue
+        if lowered in LOWERCASE_TITLE_CONNECTORS and collected:
+            collected.append(lowered)
+            continue
+        break
+
+    if not collected:
+        return None
+    candidate = " ".join(collected).strip()
+    if not _looks_like_show_line(candidate):
+        return None
+    return candidate
+
+
+def _extract_known_show_candidates(text: str) -> list[str]:
+    candidates: list[tuple[int, str]] = []
+    for pattern, canonical in KNOWN_SHOW_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            candidates.append((match.start(), canonical))
+    candidates.sort(key=lambda item: item[0])
+    return [value for _index, value in candidates]
+
+
+def _extract_known_venue_candidates(text: str) -> list[str]:
+    candidates: list[tuple[int, str]] = []
+    for pattern, canonical in KNOWN_VENUE_HINTS:
+        match = pattern.search(text)
+        if match:
+            candidates.append((match.start(), canonical))
+    candidates.sort(key=lambda item: item[0])
+    return [value for _index, value in candidates]
+
+
+def _looks_like_disclaimer_line(line: str) -> bool:
+    return any(phrase.lower() in line.lower() for phrase in DISCLAIMER_PHRASES)
+
+
+def _looks_like_show_line(line: str) -> bool:
+    if not line or len(line) < 3:
+        return False
+    lowered = line.strip().lower()
+    if lowered in SHOW_LABEL_BLACKLIST:
+        return False
+    if lowered in {"level", "date", "time", "lead booker:", "return code: £"}:
+        return False
+    if "customer name" in lowered or "order reference" in lowered or "order id" in lowered:
+        return False
+    if lowered == "united kingdom":
+        return False
+    if MONTH_DAY_RE.search(line) or DAY_MONTH_RE.search(line):
+        return False
+    if TIME_12H_RE.search(line) or TIME_12H_COMPACT_RE.search(line) or TIME_24H_RE.search(line):
+        return False
+    if VENUE_KEYWORD_RE.search(line) and not any(pattern.search(line) for pattern, _canonical in KNOWN_SHOW_PATTERNS):
+        return False
+    if _looks_like_disclaimer_line(line):
+        return False
+    if SHOW_NOISE_RE.search(line):
+        return False
+    if re.fullmatch(r"[\d\s.]+", line):
+        return False
+    if re.search(r"\b[A-Z]{1,3}\d{1,3}\b", line):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'&.-]*", line)
+    if not words:
+        return False
+    title_like_words = [word for word in words if word[0].isupper()]
+    return len(title_like_words) >= max(1, len(words) // 2)
+
+
+def _split_seat_label(seat_label: str) -> tuple[str, str]:
+    match = re.fullmatch(r"([A-Z]{1,3})(\d{1,3})", seat_label.strip().upper())
+    if not match:
+        raise TicketBundleError(f"Could not split seat label: {seat_label}")
+    return match.group(1), match.group(2)
+
+
+def _decode_qr_payload_for_page(page) -> str:
+    fitz = _load_fitz_backend()
+    cv2, np = _load_qr_decoder_backend()
+    detector = cv2.QRCodeDetector()
+    for scale in (2, 3, 4):
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        channels = max(1, pixmap.n)
+        image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, channels)
+        if channels == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        elif channels == 1:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+        for candidate in _qr_decode_candidates(cv2, image):
+            try:
+                data, _points, _straight = detector.detectAndDecode(candidate)
+            except Exception:
+                data = ""
+            if data and data.strip():
+                return data.strip()
+
+    raise TicketBundleError("Could not decode a QR code from one or more ticket pages.")
+
+
+def _qr_decode_candidates(cv2, image):
+    height, width = image.shape[:2]
+    grayscale = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    candidates = [image, grayscale]
+    if width > 10 and height > 10:
+        candidates.extend(
+            [
+                image[height // 2 :, :],
+                image[:, width // 2 :],
+                image[height // 3 :, width // 3 :],
+                grayscale[height // 2 :, :],
+                grayscale[:, width // 2 :],
+                grayscale[height // 3 :, width // 3 :],
+            ]
+        )
+    return candidates
+
+
+def _extract_printed_barcode_value_from_page(page) -> str | None:
+    candidates: list[tuple[float, int, str]] = []
+    try:
+        words = page.get_text("words") or []
+    except Exception:
+        words = []
+
+    for word in words:
+        value = str(word[4]).strip()
+        if not re.fullmatch(r"\d{10,24}", value):
+            continue
+        top = float(word[1])
+        bottom = float(word[3])
+        candidates.append((bottom, len(value), value))
+
+    if not candidates:
+        try:
+            text = page.get_text("text") or ""
+        except Exception:
+            text = ""
+        standalone = _dedupe_strings(re.findall(r"\b\d{10,24}\b", text))
+        if len(standalone) == 1:
+            return standalone[0]
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    values = [value for _bottom, _length, value in candidates]
+    unique_values = _dedupe_strings(values)
+    if len(unique_values) == 1:
+        return unique_values[0]
+
+    bottom_most = [item for item in candidates if abs(item[0] - candidates[0][0]) < 5]
+    bottom_unique = _dedupe_strings([value for _bottom, _length, value in bottom_most])
+    if len(bottom_unique) == 1:
+        return bottom_unique[0]
+
+    return None
+
+
+def build_pkpass_for_ticket(ticket: ParsedTicketPage) -> bytes:
+    pass_payload = _build_pass_payload(ticket)
+    serialized_pass = json.dumps(pass_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    files = {
+        "pass.json": serialized_pass,
+        "icon.png": PASS_ICON_PNG,
+        "icon@2x.png": PASS_ICON_PNG,
+    }
+    manifest = {name: hashlib.sha1(blob).hexdigest() for name, blob in files.items()}
+    files["manifest.json"] = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, blob in files.items():
+            archive.writestr(name, blob)
+    output.seek(0)
+    return output.getvalue()
+
+
+def _build_pass_payload(ticket: ParsedTicketPage) -> dict[str, object]:
+    serial_source = f"{ticket.show_name}|{ticket.performance_date}|{ticket.performance_time}|{ticket.seat_label}|{ticket.qr_payload}"
+    serial_number = hashlib.sha1(serial_source.encode("utf-8")).hexdigest()
+    barcode = {
+        "format": "PKBarcodeFormatQR",
+        "message": ticket.qr_payload,
+        "messageEncoding": "iso-8859-1",
+        "altText": ticket.seat_label,
+    }
+    return {
+        "formatVersion": 1,
+        "passTypeIdentifier": WALLET_PASS_TYPE_IDENTIFIER,
+        "serialNumber": serial_number,
+        "teamIdentifier": WALLET_TEAM_IDENTIFIER,
+        "organizationName": WALLET_ORGANIZATION_NAME,
+        "description": WALLET_PASS_DESCRIPTION,
+        "logoText": ticket.show_name,
+        "eventTicket": {
+            "headerFields": [
+                {"key": "venue", "label": "Venue", "value": ticket.venue_name},
+            ],
+            "primaryFields": [
+                {"key": "show", "label": "Show", "value": ticket.show_name},
+            ],
+            "secondaryFields": [
+                {"key": "date", "label": "Date", "value": ticket.performance_date},
+                {"key": "time", "label": "Time", "value": ticket.performance_time},
+            ],
+            "auxiliaryFields": [
+                {"key": "row", "label": "Row", "value": ticket.row},
+                {"key": "seat", "label": "Seat", "value": ticket.seat},
+            ],
+        },
+        "barcode": barcode,
+        "barcodes": [barcode],
+    }
 
 
 def build_booking_groups(
@@ -568,10 +1309,16 @@ def build_booking_groups(
     return groups
 
 
-def build_bundle_zip(pdf_bytes: bytes, groups: list[BookingTicketGroup]) -> bytes:
+def build_bundle_zip(
+    pdf_bytes: bytes,
+    groups: list[BookingTicketGroup],
+    parsed_pages: list[ParsedTicketPage] | None = None,
+) -> bytes:
     complete_groups, _ = split_groups_for_output(groups)
     output = BytesIO()
     base_modified_at = _build_bundle_zip_base_modified_at()
+    pass_artifacts = build_pkpass_artifacts(parsed_pages or [])
+    written_pass_pages: set[int] = set()
 
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         manifest_csv = _build_manifest_csv(complete_groups)
@@ -585,6 +1332,21 @@ def build_bundle_zip(pdf_bytes: bytes, groups: list[BookingTicketGroup]) -> byte
             file_info = zipfile.ZipInfo(filename, date_time=_zip_info_datetime(base_modified_at, index))
             file_info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(file_info, pdf_blob)
+
+            for pass_page_index in group.page_indexes:
+                if pass_page_index in written_pass_pages:
+                    continue
+                artifact = pass_artifacts.get(pass_page_index)
+                if artifact is None:
+                    continue
+                pass_name, pass_blob = artifact
+                pass_info = zipfile.ZipInfo(
+                    f"wallet/{pass_name}",
+                    date_time=_zip_info_datetime(base_modified_at, len(complete_groups) + len(written_pass_pages) + 1),
+                )
+                pass_info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(pass_info, pass_blob)
+                written_pass_pages.add(pass_page_index)
 
     output.seek(0)
     return output.getvalue()
@@ -1208,6 +1970,36 @@ def build_output_filenames(groups: list[BookingTicketGroup]) -> list[str]:
     return output
 
 
+def output_pkpass_filename(ticket: ParsedTicketPage) -> str:
+    return f"{_safe_filename(ticket.row)}-{_safe_filename(ticket.seat)}.pkpass"
+
+
+def build_output_pass_filenames(tickets: list[ParsedTicketPage]) -> list[str]:
+    used: set[str] = set()
+    output: list[str] = []
+
+    for ticket in tickets:
+        base = output_pkpass_filename(ticket)
+        candidate = base
+        duplicate_index = 2
+        while candidate in used:
+            stem = base[:-7] if base.lower().endswith(".pkpass") else base
+            candidate = f"{stem}_{duplicate_index}.pkpass"
+            duplicate_index += 1
+        used.add(candidate)
+        output.append(candidate)
+
+    return output
+
+
+def build_pkpass_artifacts(tickets: list[ParsedTicketPage]) -> dict[int, tuple[str, bytes]]:
+    filenames = build_output_pass_filenames(tickets)
+    return {
+        ticket.page_index: (filename, build_pkpass_for_ticket(ticket))
+        for ticket, filename in zip(tickets, filenames)
+    }
+
+
 def _load_pdf_backend():
     try:  # pragma: no branch
         from pypdf import PdfReader, PdfWriter
@@ -1222,3 +2014,24 @@ def _load_pdf_backend():
             raise TicketBundleError(
                 "PDF processing library missing. Install with: pip install pypdf"
             ) from exc
+
+
+def _load_fitz_backend():
+    try:
+        import fitz
+
+        return fitz
+    except Exception as exc:
+        raise TicketBundleError("PyMuPDF is required for Wallet pass generation. Install with: pip install PyMuPDF") from exc
+
+
+def _load_qr_decoder_backend():
+    try:
+        import cv2
+        import numpy as np
+
+        return cv2, np
+    except Exception as exc:
+        raise TicketBundleError(
+            "OpenCV is required for QR decoding. Install with: pip install opencv-python-headless"
+        ) from exc
