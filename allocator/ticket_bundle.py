@@ -1287,8 +1287,14 @@ def build_booking_groups(
     for idx, row in enumerate(allocation_rows):
         booking_ref = row["booking_reference"].strip()
         email_key = row["email"].strip().lower()
+        customer_name_key = _normalize_customer_name_for_grouping(row["customer_name"])
         normalized_ref = _normalize_booking_reference_for_grouping(booking_ref)
-        key = f"{normalized_ref}|{email_key}" if normalized_ref else email_key
+        if normalized_ref:
+            key = f"{normalized_ref}|{email_key}"
+        elif email_key and customer_name_key:
+            key = f"{email_key}|{customer_name_key}"
+        else:
+            key = email_key
         if not key:
             key = f"row-{idx+1}"
         grouped_rows.setdefault(key, []).append(row)
@@ -1831,6 +1837,15 @@ def _normalize_booking_reference_for_grouping(value: str) -> str:
         return ""
 
     return ref
+
+
+def _normalize_customer_name_for_grouping(value: str) -> str:
+    clean = " ".join(value.strip().lower().split())
+    if not clean:
+        return ""
+    if _looks_like_unknown_name(clean):
+        return ""
+    return clean
 
 
 def _infer_name_column(matrix: list[list[str]], email_col: int, excluded: set[int]) -> int | None:

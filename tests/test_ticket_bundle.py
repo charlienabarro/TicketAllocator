@@ -1085,6 +1085,28 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0].seat_labels, ["C1", "C2", "C3", "C4"])
 
+    def test_groups_split_same_email_when_note_like_booking_ref_has_different_names(self) -> None:
+        rows = [
+            {
+                "booking_reference": "extra",
+                "customer_name": "Sharon Brookstein",
+                "email": "shared@example.com",
+                "seats_raw": "STANDING 39",
+            },
+            {
+                "booking_reference": "extra",
+                "customer_name": "Sharon Bamberg",
+                "email": "shared@example.com",
+                "seats_raw": "STANDING 58",
+            },
+        ]
+        seat_to_page = {"STANDING39": 86, "STANDING58": 106}
+        groups = build_booking_groups(rows, seat_to_page)
+
+        self.assertEqual(len(groups), 2)
+        self.assertEqual([group.customer_name for group in groups], ["Sharon Brookstein", "Sharon Bamberg"])
+        self.assertEqual([group.seat_labels for group in groups], [["STANDING39"], ["STANDING58"]])
+
     def test_output_filename_falls_back_to_email_when_name_unknown(self) -> None:
         rows = [
             {
