@@ -41,6 +41,14 @@ class TicketBundleTests(unittest.TestCase):
         parsed = parse_seat_list("C1 to 5")
         self.assertEqual(parsed, ["C1", "C2", "C3", "C4", "C5"])
 
+    def test_parse_seat_list_with_standing_labels(self) -> None:
+        parsed = parse_seat_list("STANDING 1; Dance Floor GA 2; GA3")
+        self.assertEqual(parsed, ["STANDING1", "STANDING2", "STANDING3"])
+
+    def test_parse_seat_list_with_standing_range(self) -> None:
+        parsed = parse_seat_list("Standing 1 to 3")
+        self.assertEqual(parsed, ["STANDING1", "STANDING2", "STANDING3"])
+
     def test_extract_seat_tokens_from_row_and_seat_labels(self) -> None:
         text = "LEVEL ROW SEAT\nROW J SEAT 11\n"
         parsed = _extract_seat_tokens(text)
@@ -398,7 +406,7 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(parsed[0].performance_date, "Apr 10")
         self.assertEqual(parsed[0].performance_time, "7.45")
 
-    def test_parse_ticket_pdf_page_results_skips_abba_dance_floor_pages_without_expected_seats(self) -> None:
+    def test_parse_ticket_pdf_page_results_assigns_abba_dance_floor_pages_without_expected_seats(self) -> None:
         seated_text = (
             "ABBA Voyage\nFRI 10 APR 2026\nStart Time 7:45 PM\nABBA Arena\nGroups Ticket\n"
             "via Gate A - Arena Right\nBlock K\nSECTION\nU16s accompanied by an adult\n"
@@ -465,8 +473,51 @@ class TicketBundleTests(unittest.TestCase):
             ):
                 parsed = parse_ticket_pdf_page_results(b"%PDF-pretend")
 
-        self.assertEqual(len(parsed), 1)
+        self.assertEqual(len(parsed), 2)
         self.assertEqual(parsed[0].seat_label, "A1")
+        self.assertEqual(parsed[1].seat_label, "STANDING1")
+        self.assertEqual(parsed[1].row, "STANDING")
+        self.assertEqual(parsed[1].seat, "1")
+
+    def test_parse_ticket_pdf_page_results_assigns_abba_dance_floor_pages_to_expected_standing_labels(self) -> None:
+        dance_floor_text = (
+            "ABBA Voyage\nFRI 10 APR 2026\nStart Time 7:45 PM\nABBA Arena\nGroups Ticket\n"
+            "via Gate B\nDance Floor\nSECTION\nU16s accompanied by an adult\nGA\n"
+        )
+
+        class FakePage:
+            def get_text(self, mode: str):
+                if mode == "text":
+                    return dance_floor_text
+                if mode == "words":
+                    return [
+                        (106.0, 50.0, 143.0, 67.0, "ABBA", 0, 0, 0),
+                        (147.0, 50.0, 196.0, 67.0, "Voyage", 0, 0, 1),
+                        (101.0, 191.0, 200.0, 212.0, "Dance", 6, 0, 0),
+                        (152.0, 191.0, 200.0, 212.0, "Floor", 6, 0, 1),
+                        (165.0, 223.0, 189.0, 244.0, "GA", 13, 0, 0),
+                    ]
+                raise AssertionError(f"Unexpected mode: {mode}")
+
+        class FakeDocument:
+            page_count = 2
+
+            def load_page(self, _index: int):
+                return FakePage()
+
+        class FakeFitz:
+            @staticmethod
+            def open(*_args, **_kwargs):
+                return FakeDocument()
+
+        with patch("allocator.ticket_bundle._load_fitz_backend", return_value=FakeFitz):
+            with patch(
+                "allocator.ticket_bundle._decode_qr_payload_for_page",
+                side_effect=TicketBundleError("Could not decode a QR code from one or more ticket pages."),
+            ):
+                parsed = parse_ticket_pdf_page_results(b"%PDF-pretend", expected_seats={"standing 8", "standing 7"})
+
+        self.assertEqual([page.seat_label for page in parsed], ["STANDING7", "STANDING8"])
 
     def test_parse_ticket_pdf_pages_extracts_old_vic_show_and_venue(self) -> None:
         page_text = (
@@ -652,6 +703,10 @@ class TicketBundleTests(unittest.TestCase):
     def test_normalize_seat_labels(self) -> None:
         parsed = _normalize_seat_labels({"j11", "12 K", "bad"})
         self.assertEqual(parsed, {"J11", "K12"})
+
+    def test_normalize_seat_labels_handles_standing_labels(self) -> None:
+        parsed = _normalize_seat_labels({"standing 8", "GA 7", "bad"})
+        self.assertEqual(parsed, {"STANDING7", "STANDING8"})
 
     def test_normalize_seat_labels_handles_kx_platform_prefix(self) -> None:
         parsed = _normalize_seat_labels({"Platform1 -F-8", "Platform1 -F-17"})
@@ -964,6 +1019,23 @@ class TicketBundleTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0].seat_labels, ["C4", "C5"])
         self.assertEqual(groups[0].page_indexes, [0, 1])
+
+    def test_build_groups_maps_standing_labels(self) -> None:
+        rows = [
+            {
+                "booking_reference": "B100",
+                "customer_name": "Rachel",
+                "email": "rachel@example.com",
+                "seats_raw": "Standing 1; Standing 2",
+            }
+        ]
+        seat_to_page = {"STANDING1": 4, "STANDING2": 5}
+        groups = build_booking_groups(rows, seat_to_page)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].seat_labels, ["STANDING1", "STANDING2"])
+        self.assertEqual(groups[0].page_indexes, [4, 5])
+        self.assertEqual(groups[0].missing_seats, [])
 
     def test_split_groups_for_output_excludes_incomplete_groups(self) -> None:
         rows = [

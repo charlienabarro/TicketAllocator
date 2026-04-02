@@ -14,6 +14,15 @@ from io import BytesIO, StringIO
 
 SEAT_TOKEN_RE = re.compile(r"\b([A-Za-z]{1,3})\s*[- ]?\s*(\d{1,3})\b")
 SEAT_TOKEN_RE_REVERSED = re.compile(r"\b(\d{1,3})\s*[- ]?\s*([A-Za-z]{1,3})\b")
+GENERIC_ADMISSION_TOKEN_RE = re.compile(
+    r"\b(?:STANDING|DANCE\s*FLOOR(?:\s*GA)?|GA)\s*[- ]?\s*(\d{1,3})\b",
+    re.IGNORECASE,
+)
+GENERIC_ADMISSION_RANGE_RE = re.compile(
+    r"\b(?:STANDING|DANCE\s*FLOOR(?:\s*GA)?|GA)\s*(\d{1,3})\s*-\s*(\d{1,3})\b",
+    re.IGNORECASE,
+)
+CANONICAL_GENERIC_ADMISSION_RE = re.compile(r"STANDING(\d{1,3})\b", re.IGNORECASE)
 ROW_SEAT_LABEL_RE = re.compile(r"\bROW\b[\s:.-]*([A-Za-z]{1,3})[\s|/,-]*\bSEAT\b[\s:.-]*(\d{1,3})\b", re.IGNORECASE)
 SEAT_ROW_LABEL_RE = re.compile(r"\bSEAT\b[\s:.-]*(\d{1,3})[\s|/,-]*\bROW\b[\s:.-]*([A-Za-z]{1,3})\b", re.IGNORECASE)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -676,6 +685,8 @@ def parse_ticket_pdf_page_results(
     fitz = _load_fitz_backend()
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
     normalized_expected = _normalize_seat_labels(expected_seats or set())
+    remaining_generic_admission_labels = _sorted_generic_admission_labels(normalized_expected)
+    synthetic_generic_admission_count = 0
     raw_pages: list[dict[str, str | int | None]] = []
     aggregate_text_parts: list[str] = []
 
@@ -683,9 +694,13 @@ def parse_ticket_pdf_page_results(
         page = document.load_page(page_index)
         page_text = _extract_fitz_page_text(page)
         seat_label = _extract_page_seat_label_from_page(page, page_text, normalized_expected)
+        if seat_label is None and _is_generic_admission_page(page_text):
+            if remaining_generic_admission_labels:
+                seat_label = remaining_generic_admission_labels.pop(0)
+            elif not normalized_expected:
+                synthetic_generic_admission_count += 1
+                seat_label = _generic_admission_label(synthetic_generic_admission_count)
         if normalized_expected and seat_label is None:
-            continue
-        if not normalized_expected and seat_label is None and _should_skip_generic_admission_page(page_text):
             continue
         aggregate_text_parts.append(page_text)
         raw_pages.append(
@@ -820,7 +835,7 @@ def _extract_page_seat_label_from_page(page, text: str, expected_seats: set[str]
         if expected_seats and abba_label not in expected_seats:
             return None
         return abba_label
-    if _should_skip_generic_admission_page(text):
+    if _is_generic_admission_page(text):
         return None
     return _extract_page_seat_label(text, expected_seats)
 
@@ -884,7 +899,7 @@ def _looks_like_abba_ticket_text(text: str) -> bool:
     return "abba voyage" in lowered and "abba arena" in lowered and "groups ticket" in lowered
 
 
-def _should_skip_generic_admission_page(text: str) -> bool:
+def _is_generic_admission_page(text: str) -> bool:
     lowered = (text or "").lower()
     return _looks_like_abba_ticket_text(text) and "dance floor" in lowered
 
@@ -1117,6 +1132,9 @@ def _looks_like_show_line(line: str) -> bool:
 
 
 def _split_seat_label(seat_label: str) -> tuple[str, str]:
+    generic_match = CANONICAL_GENERIC_ADMISSION_RE.fullmatch(seat_label.strip().upper())
+    if generic_match:
+        return "STANDING", generic_match.group(1)
     match = re.fullmatch(r"([A-Z]{1,3})(\d{1,3})", seat_label.strip().upper())
     if not match:
         raise TicketBundleError(f"Could not split seat label: {seat_label}")
@@ -1403,6 +1421,11 @@ def parse_seat_list(seats_raw: str) -> list[str]:
         if not clean:
             continue
 
+        generic_labels = _extract_generic_admission_tokens(clean)
+        if generic_labels:
+            out.extend(generic_labels)
+            continue
+
         if "-" in clean or re.search(r"\bto\b", clean, flags=re.IGNORECASE):
             out.extend(_expand_range(clean))
             continue
@@ -1423,6 +1446,9 @@ def parse_seat_list(seats_raw: str) -> list[str]:
 
 def _expand_range(token: str) -> list[str]:
     token = re.sub(r"\bto\b", "-", token, flags=re.IGNORECASE)
+    generic_tokens = _extract_generic_admission_tokens(token)
+    if generic_tokens:
+        return generic_tokens
     parts = [p.strip() for p in token.split("-") if p.strip()]
     if len(parts) != 2:
         return _extract_seat_tokens(token)
@@ -1671,6 +1697,45 @@ def _normalize_seat_label(value: str) -> str | None:
     return None
 
 
+def _extract_generic_admission_tokens(text: str) -> list[str]:
+    clean = text.strip().upper()
+    if not clean:
+        return []
+
+    range_match = GENERIC_ADMISSION_RANGE_RE.fullmatch(clean)
+    if range_match:
+        start = int(range_match.group(1))
+        end = int(range_match.group(2))
+        lo, hi = sorted((start, end))
+        return [_generic_admission_label(number) for number in range(lo, hi + 1)]
+
+    single_match = GENERIC_ADMISSION_TOKEN_RE.fullmatch(clean)
+    if single_match:
+        return [_generic_admission_label(single_match.group(1))]
+
+    canonical_match = CANONICAL_GENERIC_ADMISSION_RE.fullmatch(clean)
+    if canonical_match:
+        return [_generic_admission_label(canonical_match.group(1))]
+
+    return []
+
+
+def _generic_admission_label(number: int | str) -> str:
+    return f"STANDING{int(number)}"
+
+
+def _sorted_generic_admission_labels(seat_labels: set[str]) -> list[str]:
+    generic_labels = [seat_label for seat_label in seat_labels if CANONICAL_GENERIC_ADMISSION_RE.fullmatch(seat_label)]
+    return sorted(generic_labels, key=_generic_admission_sort_key)
+
+
+def _generic_admission_sort_key(seat_label: str) -> int:
+    match = CANONICAL_GENERIC_ADMISSION_RE.fullmatch(seat_label.strip().upper())
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
 def _extract_seats_from_token_sequence(tokens: list[str]) -> list[str]:
     if len(tokens) < 2:
         return []
@@ -1846,6 +1911,8 @@ def _looks_like_seat_cell(value: str) -> bool:
     text = value.strip()
     if not text:
         return False
+    if GENERIC_ADMISSION_TOKEN_RE.search(text) or CANONICAL_GENERIC_ADMISSION_RE.search(text):
+        return True
     if SEAT_TOKEN_RE.search(text):
         return True
     if re.search(r"\bto\b", text, flags=re.IGNORECASE) and re.search(r"\d", text):
