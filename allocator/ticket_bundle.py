@@ -671,6 +671,7 @@ def _dedupe_strings(values: list[str]) -> list[str]:
 def parse_ticket_pdf_page_results(
     pdf_bytes: bytes,
     expected_seats: set[str] | None = None,
+    decode_wallet: bool = True,
 ) -> list[ParsedTicketPageResult]:
     fitz = _load_fitz_backend()
     document = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -717,10 +718,11 @@ def parse_ticket_pdf_page_results(
         venue_name = page_metadata["venue_name"] or document_metadata["venue_name"]
         qr_payload: str | None = None
         wallet_error: str | None = None
-        try:
-            qr_payload = _decode_qr_payload_for_page(page)
-        except TicketBundleError as exc:
-            wallet_error = str(exc)
+        if decode_wallet:
+            try:
+                qr_payload = _decode_qr_payload_for_page(page)
+            except TicketBundleError as exc:
+                wallet_error = str(exc)
 
         missing_fields = [
             label
@@ -734,7 +736,7 @@ def parse_ticket_pdf_page_results(
         ]
         if missing_fields and not wallet_error:
             wallet_error = f"Could not detect {', '.join(missing_fields)} on ticket page {page_index + 1}."
-        if not qr_payload and not wallet_error:
+        if decode_wallet and not qr_payload and not wallet_error:
             wallet_error = f"Could not decode the original QR code on ticket page {page_index + 1}."
         parsed_pages.append(
             ParsedTicketPageResult(
@@ -755,7 +757,7 @@ def parse_ticket_pdf_page_results(
 
 
 def parse_ticket_pdf_pages(pdf_bytes: bytes, expected_seats: set[str] | None = None) -> list[ParsedTicketPage]:
-    parsed_results = parse_ticket_pdf_page_results(pdf_bytes, expected_seats=expected_seats)
+    parsed_results = parse_ticket_pdf_page_results(pdf_bytes, expected_seats=expected_seats, decode_wallet=True)
     parsed_pages: list[ParsedTicketPage] = []
     for result in parsed_results:
         parsed_pages.append(result.to_parsed_ticket_page())

@@ -10,6 +10,7 @@ import re
 import tempfile
 from urllib.parse import quote
 from uuid import uuid4
+import os
 
 from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -55,6 +56,7 @@ preview_download_cache: dict[str, dict[str, tuple[bytes, str]]] = {}
 ROOT_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = ROOT_DIR / "frontend"
 EMAIL_CELL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+WALLET_FEATURE_ENABLED = os.getenv("WALLET_FEATURE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 
@@ -73,10 +75,18 @@ async def preview_ticket_bundle(
     expected_seats = _expected_seat_labels(allocation_rows)
 
     try:
-        parsed_page_results = parse_ticket_pdf_page_results(pdf_content, expected_seats=expected_seats)
+        parsed_page_results = parse_ticket_pdf_page_results(
+            pdf_content,
+            expected_seats=expected_seats,
+            decode_wallet=WALLET_FEATURE_ENABLED,
+        )
         seat_map = _seat_map_from_page_results(parsed_page_results)
         groups = build_booking_groups(allocation_rows, seat_map)
-        parsed_pages = [result.to_parsed_ticket_page() for result in parsed_page_results if result.wallet_ready]
+        parsed_pages = (
+            [result.to_parsed_ticket_page() for result in parsed_page_results if result.wallet_ready]
+            if WALLET_FEATURE_ENABLED
+            else []
+        )
         pass_artifacts = build_pkpass_artifacts(parsed_pages)
     except TicketBundleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -88,7 +98,7 @@ async def preview_ticket_bundle(
     performance_metadata = _build_performance_metadata_from_page_results(parsed_page_results)
     missing_unique = {seat for group in groups for seat in group.missing_seats}
     matched_unique = {seat for group in groups for seat in group.seat_labels if seat in seat_map}
-    wallet_failure_rows = _collect_wallet_failure_rows(output_groups, parsed_page_results)
+    wallet_failure_rows = _collect_wallet_failure_rows(output_groups, parsed_page_results) if WALLET_FEATURE_ENABLED else []
     wallet_pass_count = len(pass_artifacts)
 
     return {
@@ -145,8 +155,17 @@ async def generate_ticket_bundle(
     expected_seats = _expected_seat_labels(allocation_rows)
 
     try:
-        parsed_pages = parse_ticket_pdf_pages(pdf_content, expected_seats=expected_seats)
-        seat_map = _seat_map_from_parsed_pages(parsed_pages)
+        if WALLET_FEATURE_ENABLED:
+            parsed_pages = parse_ticket_pdf_pages(pdf_content, expected_seats=expected_seats)
+            seat_map = _seat_map_from_parsed_pages(parsed_pages)
+        else:
+            parsed_page_results = parse_ticket_pdf_page_results(
+                pdf_content,
+                expected_seats=expected_seats,
+                decode_wallet=False,
+            )
+            seat_map = _seat_map_from_page_results(parsed_page_results)
+            parsed_pages = []
         groups = build_booking_groups(allocation_rows, seat_map)
         zip_blob = build_bundle_zip(pdf_content, groups, parsed_pages=parsed_pages)
     except TicketBundleError as exc:

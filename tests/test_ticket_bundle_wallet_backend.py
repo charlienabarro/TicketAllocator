@@ -63,14 +63,15 @@ class TicketBundleWalletBackendTests(unittest.TestCase):
         return b"".join(chunks)
 
     def test_preview_returns_wallet_pass_links(self) -> None:
-        with patch("backend.app.parse_ticket_pdf_page_results", return_value=self.parsed_page_results):
-            with patch("backend.app.build_group_pdf", return_value=b"pdf-one"):
-                payload = asyncio.run(
-                    preview_ticket_bundle(
-                        allocation_csv=self._allocation_upload(),
-                        tickets_pdf=self._ticket_upload(),
+        with patch("backend.app.WALLET_FEATURE_ENABLED", True):
+            with patch("backend.app.parse_ticket_pdf_page_results", return_value=self.parsed_page_results):
+                with patch("backend.app.build_group_pdf", return_value=b"pdf-one"):
+                    payload = asyncio.run(
+                        preview_ticket_bundle(
+                            allocation_csv=self._allocation_upload(),
+                            tickets_pdf=self._ticket_upload(),
+                        )
                     )
-                )
 
         self.assertEqual(len(payload["rows"]), 1)
         wallet_passes = payload["rows"][0]["wallet_passes"]
@@ -98,14 +99,15 @@ class TicketBundleWalletBackendTests(unittest.TestCase):
             wallet_error="Could not decode a QR code from one or more ticket pages.",
         )
 
-        with patch("backend.app.parse_ticket_pdf_page_results", return_value=[failed_result]):
-            with patch("backend.app.build_group_pdf", return_value=b"pdf-one"):
-                payload = asyncio.run(
-                    preview_ticket_bundle(
-                        allocation_csv=self._allocation_upload(),
-                        tickets_pdf=self._ticket_upload(),
+        with patch("backend.app.WALLET_FEATURE_ENABLED", True):
+            with patch("backend.app.parse_ticket_pdf_page_results", return_value=[failed_result]):
+                with patch("backend.app.build_group_pdf", return_value=b"pdf-one"):
+                    payload = asyncio.run(
+                        preview_ticket_bundle(
+                            allocation_csv=self._allocation_upload(),
+                            tickets_pdf=self._ticket_upload(),
+                        )
                     )
-                )
 
         self.assertEqual(len(payload["rows"]), 1)
         self.assertEqual(payload["rows"][0]["wallet_passes"], [])
@@ -122,15 +124,34 @@ class TicketBundleWalletBackendTests(unittest.TestCase):
         self.assertEqual(payload["stats"]["wallet_failure_count"], 1)
         self.assertEqual(payload["wallet_failures"][0]["seat_label"], "D30")
 
-    def test_generate_zip_includes_wallet_pass_bundle(self) -> None:
-        with patch("backend.app.parse_ticket_pdf_pages", return_value=self.parsed_pages):
-            with patch("allocator.ticket_bundle.build_group_pdf", return_value=b"pdf-one"):
-                response = asyncio.run(
-                    generate_ticket_bundle(
-                        allocation_csv=self._allocation_upload(),
-                        tickets_pdf=self._ticket_upload(),
+    def test_preview_disables_wallet_work_when_feature_flag_is_off(self) -> None:
+        with patch("backend.app.WALLET_FEATURE_ENABLED", False):
+            with patch("backend.app.parse_ticket_pdf_page_results", return_value=self.parsed_page_results) as parse_results:
+                with patch("backend.app.build_group_pdf", return_value=b"pdf-one"):
+                    payload = asyncio.run(
+                        preview_ticket_bundle(
+                            allocation_csv=self._allocation_upload(),
+                            tickets_pdf=self._ticket_upload(),
+                        )
                     )
-                )
+
+        parse_results.assert_called_once()
+        self.assertEqual(payload["rows"][0]["wallet_passes"], [])
+        self.assertEqual(payload["rows"][0]["wallet_failures"], [])
+        self.assertEqual(payload["wallet_failures"], [])
+        self.assertEqual(payload["stats"]["wallet_pass_count"], 0)
+        self.assertEqual(payload["stats"]["wallet_failure_count"], 0)
+
+    def test_generate_zip_includes_wallet_pass_bundle(self) -> None:
+        with patch("backend.app.WALLET_FEATURE_ENABLED", True):
+            with patch("backend.app.parse_ticket_pdf_pages", return_value=self.parsed_pages):
+                with patch("allocator.ticket_bundle.build_group_pdf", return_value=b"pdf-one"):
+                    response = asyncio.run(
+                        generate_ticket_bundle(
+                            allocation_csv=self._allocation_upload(),
+                            tickets_pdf=self._ticket_upload(),
+                        )
+                    )
 
         zip_blob = asyncio.run(self._read_streaming_body(response))
         with zipfile.ZipFile(BytesIO(zip_blob)) as archive:
@@ -138,6 +159,24 @@ class TicketBundleWalletBackendTests(unittest.TestCase):
 
         self.assertIn("Jane_tickets.pdf", names)
         self.assertIn("wallet/D-30.pkpass", names)
+
+    def test_generate_zip_skips_wallet_when_feature_flag_is_off(self) -> None:
+        with patch("backend.app.WALLET_FEATURE_ENABLED", False):
+            with patch("backend.app.parse_ticket_pdf_page_results", return_value=self.parsed_page_results):
+                with patch("allocator.ticket_bundle.build_group_pdf", return_value=b"pdf-one"):
+                    response = asyncio.run(
+                        generate_ticket_bundle(
+                            allocation_csv=self._allocation_upload(),
+                            tickets_pdf=self._ticket_upload(),
+                        )
+                    )
+
+        zip_blob = asyncio.run(self._read_streaming_body(response))
+        with zipfile.ZipFile(BytesIO(zip_blob)) as archive:
+            names = archive.namelist()
+
+        self.assertIn("Jane_tickets.pdf", names)
+        self.assertNotIn("wallet/D-30.pkpass", names)
 
 
 if __name__ == "__main__":
